@@ -18,6 +18,7 @@ Usage: sudo python3 ps2_drive_test.py
 
 import can
 import struct
+import threading
 import time
 from PS2 import PS2Controller
 
@@ -25,6 +26,20 @@ from PS2 import PS2Controller
 MAX_RPM = 200          # max RPM per motor
 DEADZONE = 15          # joystick center deadzone (around 128)
 SEND_INTERVAL = 0.05   # 50ms = 20Hz
+HEARTBEAT_INTERVAL = 0.1   # 100ms, well under STM32's 200ms timeout
+
+
+def heartbeat_loop(bus, stop_event):
+    """Send CAN 0x300 (DLC=0) every 100ms on its own thread.
+
+    Runs independent of the PS2 read loop so PS2Controller.read()'s
+    blocking bit-bang I/O (and the "no controller" 0.5s sleep) can never
+    cause a heartbeat gap long enough to trip the STM32's 200ms timeout.
+    """
+    msg = can.Message(arbitration_id=0x300, data=b'', is_extended_id=False)
+    while not stop_event.is_set():
+        bus.send(msg)
+        stop_event.wait(HEARTBEAT_INTERVAL)
 
 
 def map_axis(value):
@@ -47,9 +62,14 @@ def main():
     ps2 = PS2Controller()
     bus = can.Bus(channel='can0', interface='socketcan', bitrate=500000)
 
+    hb_stop = threading.Event()
+    hb_thread = threading.Thread(target=heartbeat_loop, args=(bus, hb_stop), daemon=True)
+    hb_thread.start()
+
     print("PS2 X-Drive Test — Ctrl+C to stop")
     print(f"Max RPM: ±{MAX_RPM}")
     print("Left stick: move  |  Right stick X: rotate")
+    print(f"Heartbeat: 0x300 every {int(HEARTBEAT_INTERVAL*1000)}ms")
 
     try:
         while True:
@@ -107,6 +127,8 @@ def main():
         bus.send(can.Message(arbitration_id=0x100, data=stop, is_extended_id=False))
         print("\nStopped — sent zero RPM")
     finally:
+        hb_stop.set()
+        hb_thread.join(timeout=1.0)
         bus.shutdown()
         ps2.cleanup()
 

@@ -28,12 +28,65 @@
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
+typedef struct {
+  float kp, ki, kd;
+  float integral;
+  float prev_error;
+} PID_t;
 
+typedef struct {
+  TIM_HandleTypeDef* enc_tim;   // encoder timer
+  uint32_t pwm_ch;              // TIM1 PWM channel
+  uint16_t fwd_pin;             // direction forward
+  uint16_t rev_pin;             // direction reverse
+  int16_t target_rpm;           // from CAN 0x100
+  int32_t cum_ticks;            // cumulative encoder ticks
+  uint16_t prev_cnt;            // previous raw counter (for 16-bit overflow)
+  uint8_t is_32bit;             // 1=32-bit timer, 0=16-bit
+  PID_t pid;
+} Motor_t;
+
+// ── Motor index <-> physical wheel position ──
+// This is the single source of truth for which motor index corresponds
+// to which physical corner of the x-drive chassis. It MUST stay in sync
+// with:
+//   - odometry.py's MOTOR_MAP (RPi side, {0:"fl",1:"fr",2:"rl",3:"rr"})
+//   - ps2_drive_test.py's inverse-kinematics ordering (m0=fl,m1=fr,m2=rl,m3=rr)
+//   - CAN 0x100 (velocity command) / 0x200,0x201 (encoder feedback) payload order
+// Confirmed against physical wiring 2026-07-03: see PROJECT_STATE.md decision log.
+typedef enum {
+  MOTOR_FL = 0,  // front-left  -> TIM2 (32-bit encoder, PA15/PB3)
+  MOTOR_FR = 1,  // front-right -> TIM3 (16-bit encoder, PB4/PA7)
+  MOTOR_RL = 2,  // rear-left   -> TIM4 (16-bit encoder, PB6/PB7)
+  MOTOR_RR = 3,  // rear-right  -> TIM5 (32-bit encoder, PA0/PA1)
+} MotorPosition;
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
+#define NUM_MOTORS       4
+#define PWM_PERIOD       4999
+#define MAX_RPM          300
 
+// Encoder counts per output-shaft revolution
+// GA12-N20: 7 PPR motor × gear_ratio × 4 (TI12 mode)
+// Adjust this after measuring your actual encoder!
+#define ENCODER_CPR      2800
+
+// PID gains (tune these on real hardware)
+#define PID_KP           8.0f
+#define PID_KI           2.0f
+#define PID_KD           0.1f
+
+// Timing
+#define PID_INTERVAL_MS  20     // PID + encoder send rate
+#define HEARTBEAT_TIMEOUT_MS 200
+
+// CAN IDs
+#define CAN_ID_VEL_CMD   0x100   // payload: int16 target RPM x4, order = [MOTOR_FL, MOTOR_FR, MOTOR_RL, MOTOR_RR]
+#define CAN_ID_ENCODER_0 0x200   // payload: int32 cum_ticks x2 = [MOTOR_FL, MOTOR_FR]
+#define CAN_ID_ENCODER_1 0x201   // payload: int32 cum_ticks x2 = [MOTOR_RL, MOTOR_RR]
+#define CAN_ID_HEARTBEAT 0x300
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -53,7 +106,9 @@ TIM_HandleTypeDef htim5;
 UART_HandleTypeDef huart2;
 
 /* USER CODE BEGIN PV */
-
+Motor_t motors[NUM_MOTORS];
+uint32_t last_heartbeat = 0;
+uint32_t last_pid_time = 0;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -72,6 +127,58 @@ static void MX_USART2_UART_Init(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+
+// ── Read encoder ticks (handles 16-bit overflow) ──
+void encoder_update(Motor_t* m) {
+  if (m->is_32bit) {
+    m->cum_ticks = (int32_t)__HAL_TIM_GET_COUNTER(m->enc_tim);
+  } else {
+    uint16_t cnt = (uint16_t)__HAL_TIM_GET_COUNTER(m->enc_tim);
+    int16_t delta = (int16_t)(cnt - m->prev_cnt);
+    m->cum_ticks += delta;
+    m->prev_cnt = cnt;
+  }
+}
+
+// ── PID compute: returns PWM duty (signed, +=forward) ──
+float pid_compute(PID_t* pid, float target, float actual, float dt) {
+  float error = target - actual;
+  pid->integral += error * dt;
+
+  // Anti-windup: clamp integral
+  if (pid->integral > 500.0f) pid->integral = 500.0f;
+  if (pid->integral < -500.0f) pid->integral = -500.0f;
+
+  float derivative = (dt > 0.0f) ? (error - pid->prev_error) / dt : 0.0f;
+  pid->prev_error = error;
+
+  return pid->kp * error + pid->ki * pid->integral + pid->kd * derivative;
+}
+
+// ── Set motor direction and PWM ──
+void motor_set_pwm(Motor_t* m, int32_t duty) {
+  if (duty > 0) {
+    HAL_GPIO_WritePin(GPIOB, m->fwd_pin, GPIO_PIN_SET);
+    HAL_GPIO_WritePin(GPIOB, m->rev_pin, GPIO_PIN_RESET);
+  } else if (duty < 0) {
+    HAL_GPIO_WritePin(GPIOB, m->fwd_pin, GPIO_PIN_RESET);
+    HAL_GPIO_WritePin(GPIOB, m->rev_pin, GPIO_PIN_SET);
+    duty = -duty;
+  } else {
+    HAL_GPIO_WritePin(GPIOB, m->fwd_pin, GPIO_PIN_RESET);
+    HAL_GPIO_WritePin(GPIOB, m->rev_pin, GPIO_PIN_RESET);
+  }
+  if (duty > PWM_PERIOD) duty = PWM_PERIOD;
+  __HAL_TIM_SET_COMPARE(&htim1, m->pwm_ch, (uint32_t)duty);
+}
+
+// ── Stop all motors ──
+void motors_stop(void) {
+  for (int i = 0; i < NUM_MOTORS; i++) {
+    motors[i].target_rpm = 0;
+    motor_set_pwm(&motors[i], 0);
+  }
+}
 
 /* USER CODE END 0 */
 
@@ -113,24 +220,34 @@ int main(void)
   MX_USART2_UART_Init();
   /* USER CODE BEGIN 2 */
 
-  // ── Encoder ──
-  HAL_TIM_Encoder_Start(&htim2, TIM_CHANNEL_ALL);
+  // ── Motor config table ──
+  // Indexed by MotorPosition (see typedef above) -- NOT arbitrary order.
+  // Wiring confirmed 2026-07-03: TIM2=FL, TIM3=FR, TIM4=RL, TIM5=RR.
+  motors[MOTOR_FL] = (Motor_t){&htim2, TIM_CHANNEL_1, GPIO_PIN_1,  GPIO_PIN_0,  0, 0, 0, 1, {PID_KP,PID_KI,PID_KD, 0,0}};
+  motors[MOTOR_FR] = (Motor_t){&htim3, TIM_CHANNEL_2, GPIO_PIN_10, GPIO_PIN_2,  0, 0, 0, 0, {PID_KP,PID_KI,PID_KD, 0,0}};
+  motors[MOTOR_RL] = (Motor_t){&htim4, TIM_CHANNEL_3, GPIO_PIN_12, GPIO_PIN_13, 0, 0, 0, 0, {PID_KP,PID_KI,PID_KD, 0,0}};
+  motors[MOTOR_RR] = (Motor_t){&htim5, TIM_CHANNEL_4, GPIO_PIN_14, GPIO_PIN_15, 0, 0, 0, 1, {PID_KP,PID_KI,PID_KD, 0,0}};
 
-  // ── 4 路 PWM (全部初始 duty=0) ──
+  // ── Start 4 encoder timers ──
+  HAL_TIM_Encoder_Start(&htim2, TIM_CHANNEL_ALL);
+  HAL_TIM_Encoder_Start(&htim3, TIM_CHANNEL_ALL);
+  HAL_TIM_Encoder_Start(&htim4, TIM_CHANNEL_ALL);
+  HAL_TIM_Encoder_Start(&htim5, TIM_CHANNEL_ALL);
+
+  // ── Start 4 PWM channels (duty=0) ──
   HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_1);
   HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_2);
   HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_3);
   HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_4);
-  __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, 0);
-  __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_2, 0);
-  __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_3, 0);
-  __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_4, 0);
 
-  // ── MCP2515 Init ──
+  // ── MCP2515 init ──
   CAN_Error err;
   err = MCP_reset();
   if (err == ERROR_OK) err = MCP_setBitrateClock(CAN_500KBPS, MCP_8MHZ);
   if (err == ERROR_OK) err = MCP_setNormalMode();
+
+  last_heartbeat = HAL_GetTick();
+  last_pid_time = HAL_GetTick();
 
   /* USER CODE END 2 */
 
@@ -140,54 +257,73 @@ int main(void)
   {
     /* USER CODE BEGIN WHILE */
 
-    // ── 收 CAN 速度指令 (0x100) ──
+    // ── Poll CAN messages ──
     can_frame rx_frame;
     if (MCP_readMessage(&rx_frame) == ERROR_OK) {
-      if (rx_frame.can_id == 0x100 && rx_frame.can_dlc == 8) {
+
+      // Velocity command (0x100): 4× int16 target RPM, order = MOTOR_FL/FR/RL/RR
+      if (rx_frame.can_id == CAN_ID_VEL_CMD && rx_frame.can_dlc == 8) {
         int16_t rpm[4];
         memcpy(rpm, rx_frame.data, 8);
-
-        // Motor pin 映射: {fwd_pin, rev_pin, pwm_channel}
-        const uint16_t fwd_pin[4] = {GPIO_PIN_1,  GPIO_PIN_10, GPIO_PIN_12, GPIO_PIN_14};
-        const uint16_t rev_pin[4] = {GPIO_PIN_0,  GPIO_PIN_2,  GPIO_PIN_13, GPIO_PIN_15};
-        const uint32_t pwm_ch[4]  = {TIM_CHANNEL_1, TIM_CHANNEL_2, TIM_CHANNEL_3, TIM_CHANNEL_4};
-
-        for (int i = 0; i < 4; i++) {
-          int16_t r = rpm[i];
-
-          // 设方向
-          if (r > 0) {
-            HAL_GPIO_WritePin(GPIOB, fwd_pin[i], GPIO_PIN_SET);
-            HAL_GPIO_WritePin(GPIOB, rev_pin[i], GPIO_PIN_RESET);
-          } else if (r < 0) {
-            HAL_GPIO_WritePin(GPIOB, fwd_pin[i], GPIO_PIN_RESET);
-            HAL_GPIO_WritePin(GPIOB, rev_pin[i], GPIO_PIN_SET);
-            r = -r;
-          } else {
-            HAL_GPIO_WritePin(GPIOB, fwd_pin[i], GPIO_PIN_RESET);
-            HAL_GPIO_WritePin(GPIOB, rev_pin[i], GPIO_PIN_RESET);
-          }
-
-          // RPM → PWM duty: |rpm| / 300 * 4999, 上限 4999
-          uint32_t duty = (uint32_t)r * 4999 / 300;
-          if (duty > 4999) duty = 4999;
-          __HAL_TIM_SET_COMPARE(&htim1, pwm_ch[i], duty);
+        for (int i = 0; i < NUM_MOTORS; i++) {
+          motors[i].target_rpm = rpm[i];  // i indexes MotorPosition directly
         }
+      }
+
+      // Heartbeat (0x300)
+      if (rx_frame.can_id == CAN_ID_HEARTBEAT) {
+        last_heartbeat = HAL_GetTick();
       }
     }
 
-    // ── 发 Encoder 数据 (0x200), 每 20ms ──
-    static uint32_t last_enc = 0;
-    if (HAL_GetTick() - last_enc >= 20) {
-      last_enc = HAL_GetTick();
-      can_frame tx_frame;
-      tx_frame.can_id  = 0x200;
-      tx_frame.can_dlc = 8;
-      int32_t ticks = (int32_t)__HAL_TIM_GET_COUNTER(&htim2);
-      memcpy(&tx_frame.data[0], &ticks, 4);
-      int32_t zero = 0;
-      memcpy(&tx_frame.data[4], &zero, 4);
-      MCP_sendMessage(&tx_frame);
+    // ── Heartbeat timeout → emergency stop ──
+    if (HAL_GetTick() - last_heartbeat > HEARTBEAT_TIMEOUT_MS) {
+      motors_stop();
+    }
+
+    // ── PID loop + encoder send @ 20ms ──
+    uint32_t now = HAL_GetTick();
+    if (now - last_pid_time >= PID_INTERVAL_MS) {
+      float dt = (now - last_pid_time) / 1000.0f;
+      last_pid_time = now;
+
+      // Store previous ticks for RPM calculation
+      static int32_t prev_ticks[NUM_MOTORS] = {0};
+
+      for (int i = 0; i < NUM_MOTORS; i++) {
+        // Update encoder
+        encoder_update(&motors[i]);
+
+        // Compute actual RPM
+        int32_t delta = motors[i].cum_ticks - prev_ticks[i];
+        prev_ticks[i] = motors[i].cum_ticks;
+        float actual_rpm = (delta * 60.0f) / (dt * ENCODER_CPR);
+
+        // PID → PWM
+        float target = (float)motors[i].target_rpm;
+        float output = pid_compute(&motors[i].pid, target, actual_rpm, dt);
+
+        // Convert PID output to PWM duty
+        int32_t duty = (int32_t)(output * PWM_PERIOD / MAX_RPM);
+        motor_set_pwm(&motors[i], duty);
+      }
+
+      // ── Send encoder data ──
+      // Frame 0x200: MOTOR_FL + MOTOR_FR
+      can_frame tx0;
+      tx0.can_id = CAN_ID_ENCODER_0;
+      tx0.can_dlc = 8;
+      memcpy(&tx0.data[0], &motors[MOTOR_FL].cum_ticks, 4);
+      memcpy(&tx0.data[4], &motors[MOTOR_FR].cum_ticks, 4);
+      MCP_sendMessage(&tx0);
+
+      // Frame 0x201: MOTOR_RL + MOTOR_RR
+      can_frame tx1;
+      tx1.can_id = CAN_ID_ENCODER_1;
+      tx1.can_dlc = 8;
+      memcpy(&tx1.data[0], &motors[MOTOR_RL].cum_ticks, 4);
+      memcpy(&tx1.data[4], &motors[MOTOR_RR].cum_ticks, 4);
+      MCP_sendMessage(&tx1);
     }
 
     HAL_Delay(1);
