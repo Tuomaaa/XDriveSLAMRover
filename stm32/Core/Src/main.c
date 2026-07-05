@@ -68,18 +68,28 @@ typedef enum {
 #define PWM_PERIOD       4999
 #define MAX_RPM          300
 
+// Motor control mode:
+//   0 = open-loop  -> joystick target RPM maps straight to PWM duty. No
+//       encoder feedback in the control path, so the reversed encoders
+//       can't cause PID runaway. This is what the RC + odometry-calibration
+//       phase needs; odometry reads encoders directly and does NOT depend
+//       on closed-loop speed control.
+//   1 = closed-loop speed PID (see pid_compute + ENC_SIGN). Re-enable later
+//       for autonomous cmd_vel driving. The PID code is retained below.
+#define USE_PID          0
+
 // Encoder counts per output-shaft revolution
 // GA12-N20: 7 PPR motor × gear_ratio × 4 (TI12 mode)
 // Adjust this after measuring your actual encoder!
 #define ENCODER_CPR      2800
 
-// PID gains (tune these on real hardware)
+// PID gains (tune these on real hardware) -- only used when USE_PID = 1
 #define PID_KP           8.0f
 #define PID_KI           2.0f
 #define PID_KD           0.1f
 
 // Timing
-#define PID_INTERVAL_MS  20     // PID + encoder send rate
+#define PID_INTERVAL_MS  20     // control + encoder send rate (20ms = 50Hz)
 #define HEARTBEAT_TIMEOUT_MS 200
 
 // CAN IDs
@@ -109,6 +119,18 @@ UART_HandleTypeDef huart2;
 Motor_t motors[NUM_MOTORS];
 uint32_t last_heartbeat = 0;
 uint32_t last_pid_time = 0;
+
+#if USE_PID
+// Encoder direction vs. motor-command direction, per motor index.
+// CALIBRATED 2026-07-04: all four encoders count DOWN when the motor is
+// driven forward (target_rpm > 0). Without this correction the PID uses
+// the raw (reversed) count as feedback, which turns speed control into
+// POSITIVE feedback and makes the motors run away to full speed on the
+// slightest disturbance. This sign is ONLY applied to the PID feedback;
+// the cumulative ticks sent over CAN (0x200/0x201) stay raw, so the RPi
+// odometry keeps its own ENCODER_SIGN = -1 and needs no change.
+static const int8_t ENC_SIGN[NUM_MOTORS] = {-1, -1, -1, -1};
+#endif
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -140,7 +162,9 @@ void encoder_update(Motor_t* m) {
   }
 }
 
+#if USE_PID
 // ── PID compute: returns PWM duty (signed, +=forward) ──
+// Retained for the future closed-loop phase; compiled only when USE_PID=1.
 float pid_compute(PID_t* pid, float target, float actual, float dt) {
   float error = target - actual;
   pid->integral += error * dt;
@@ -154,6 +178,7 @@ float pid_compute(PID_t* pid, float target, float actual, float dt) {
 
   return pid->kp * error + pid->ki * pid->integral + pid->kd * derivative;
 }
+#endif
 
 // ── Set motor direction and PWM ──
 void motor_set_pwm(Motor_t* m, int32_t duty) {
@@ -276,36 +301,60 @@ int main(void)
       }
     }
 
-    // ── Heartbeat timeout → emergency stop ──
-    if (HAL_GetTick() - last_heartbeat > HEARTBEAT_TIMEOUT_MS) {
+    // ── Heartbeat alive? ──
+    // If not, we must skip the control update entirely (below), otherwise the
+    // control block would immediately re-drive the PWM that motors_stop() just
+    // cleared, defeating the emergency stop.
+    uint8_t hb_ok = (HAL_GetTick() - last_heartbeat <= HEARTBEAT_TIMEOUT_MS);
+    if (!hb_ok) {
       motors_stop();
     }
 
-    // ── PID loop + encoder send @ 20ms ──
+    // ── Motor control + encoder send @ 20ms ──
     uint32_t now = HAL_GetTick();
     if (now - last_pid_time >= PID_INTERVAL_MS) {
+#if USE_PID
       float dt = (now - last_pid_time) / 1000.0f;
+      static int32_t prev_ticks[NUM_MOTORS] = {0};
+#endif
       last_pid_time = now;
 
-      // Store previous ticks for RPM calculation
-      static int32_t prev_ticks[NUM_MOTORS] = {0};
-
       for (int i = 0; i < NUM_MOTORS; i++) {
-        // Update encoder
+        // Always update the encoder (needed for cumulative ticks + CAN, and
+        // so 16-bit timers don't silently wrap between reads), even when the
+        // heartbeat is dead and motors are stopped.
         encoder_update(&motors[i]);
 
-        // Compute actual RPM
+#if USE_PID
+        // Closed-loop speed control with encoder-direction correction.
         int32_t delta = motors[i].cum_ticks - prev_ticks[i];
         prev_ticks[i] = motors[i].cum_ticks;
-        float actual_rpm = (delta * 60.0f) / (dt * ENCODER_CPR);
+        float actual_rpm = (ENC_SIGN[i] * delta * 60.0f) / (dt * ENCODER_CPR);
 
-        // PID → PWM
-        float target = (float)motors[i].target_rpm;
-        float output = pid_compute(&motors[i].pid, target, actual_rpm, dt);
-
-        // Convert PID output to PWM duty
-        int32_t duty = (int32_t)(output * PWM_PERIOD / MAX_RPM);
-        motor_set_pwm(&motors[i], duty);
+        if (hb_ok) {
+          float target = (float)motors[i].target_rpm;
+          float output = pid_compute(&motors[i].pid, target, actual_rpm, dt);
+          int32_t duty = (int32_t)(output * PWM_PERIOD / MAX_RPM);
+          motor_set_pwm(&motors[i], duty);
+        } else {
+          // Emergency stop: keep motors off and reset PID state so the
+          // integrator can't wind up while stopped (no bump on restart).
+          motors[i].pid.integral = 0.0f;
+          motors[i].pid.prev_error = 0.0f;
+          motor_set_pwm(&motors[i], 0);
+        }
+#else
+        // Open-loop: joystick target RPM maps straight to PWM duty. No
+        // encoder feedback in the control path, so the reversed-encoder
+        // polarity cannot cause runaway. motor_set_pwm() handles direction
+        // sign and clamps magnitude to PWM_PERIOD.
+        if (hb_ok) {
+          int32_t duty = (int32_t)((float)motors[i].target_rpm * PWM_PERIOD / MAX_RPM);
+          motor_set_pwm(&motors[i], duty);
+        } else {
+          motor_set_pwm(&motors[i], 0);
+        }
+#endif
       }
 
       // ── Send encoder data ──

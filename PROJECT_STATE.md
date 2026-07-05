@@ -1,7 +1,7 @@
 # SummerSLAM — Project State
 
 > 最后更新：2026-07-04
-> 当前阶段：Week 3 → Week 4 过渡 — odometry.py 已标定（ENCODER_SIGN 全 -1，ENCODER_CPR 2779），`can_bridge_node.py` 已接入 `OdometryEstimator` 并发布 odom+TF。**下一步（唯一卡点）：Ground truth sanity check（正方形 + 原地转 360°）实机验证 vy/omega 方向**，通过后即进 Week4 drift 实验
+> 当前阶段：Week 3 → Week 4 过渡 — odometry.py 已标定（ENCODER_SIGN 全 -1，ENCODER_CPR 2779），`can_bridge_node.py` 已接入 `OdometryEstimator` 并发布 odom+TF。发现 STM32 侧 PID runaway（encoder 反向→正反馈），已改为 open-loop（`USE_PID=0`，PID 保留待用），并修复 heartbeat 急停失效。**下一步：重新烧录 STM32 验证不再 runaway → 再做 Ground truth sanity check（正方形 + 原地转 360°）验证 vy/omega 方向 → Week4 drift**
 
 ---
 
@@ -107,10 +107,14 @@ Payload 格式：
 - [x] 电机基础驱动验证 (PWM + 方向 GPIO → TB6612 → 电机转)
 - [x] Encoder 读取 (TIM2 encoder start + CNT → CAN 0x200 验证通过)
 - [x] PWM 输出 + 电机方向 GPIO 控制
-- [x] PID 速度环 (20ms 周期, 初始 Kp=8/Ki=2/Kd=0.1)
+- [x] 电机控制：**当前用 open-loop**（`main.c` 的 `#define USE_PID 0`）——摇杆 target RPM 直接映射 PWM duty。**待重新烧录验证**
+  - **决策 (2026-07-04)**：遥控 + odometry 阶段不需要闭环，PID 对 odometry 无帮助（odometry 直接读 encoder），且闭环会抹平 Week4 要测的 motion uncertainty。open-loop 还天然免疫下面那个 runaway。
+- [x] PID 速度环 (20ms 周期, Kp=8/Ki=2/Kd=0.1)：**代码保留在 `USE_PID` 分支里，当前关闭**，以后 cmd_vel 自主驾驶时翻成 1 恢复
+  - **runaway 根因 + 符号修正 (2026-07-04)**：四路 encoder 全反，PID 若用 raw 反向计数当反馈 → 正反馈 runaway（上电即全速、摇杆无效）。已加 `ENC_SIGN[4]={-1,-1,-1,-1}`（仅作用于 PID 反馈，CAN raw ticks 不变，RPi `ENCODER_SIGN=-1` 不用动），随 PID 一起留在 `#if USE_PID` 内。恢复闭环前务必确认 `USE_PID=1` 下不再 runaway
 - [x] MCP2515 SPI 驱动 + CAN loopback 收发验证 (thumptech/STM32-MCP2515 库，已修 bug)
 - [x] STM32 → RPi 真实 CAN 通信验证 (500kbps, MCP2515 模块需 5V 供电)
 - [x] Heartbeat timeout 安全停机 (200ms 内无 0x300 心跳则电机 PWM 清零)
+  - **急停失效 bug 修复 (2026-07-04)**：原来 `motors_stop()` 清零后紧随的控制块每 20ms 又把 PWM 顶回去，急停形同虚设。改成用 `hb_ok` 门控整个控制更新（open-loop 与 PID 两种模式都生效），超时时电机保持 0；PID 模式下还清 integral 防 windup。**待重新烧录验证**
 - [x] TIM3/TIM4 16-bit encoder overflow 处理 (软件扩展到 int32，与 CAN 协议累计 tick 对齐)
 
 ### ROS2 CAN Node（进行中）
@@ -181,6 +185,8 @@ Payload 格式：
 | 2026-07-04 | `main.c` 的 `ENCODER_CPR` 暂不同步改（留 2800） | STM32 侧该宏只用于 PID 的 RPM 反馈换算，0.8% 误差对速度环无实际影响；改它要再烧一次录，收益不值，待有其他固件改动时顺带更新 |
 | 2026-07-04 | odometry 触发时机：收到 0x201（完成 0/1/2/3 全套）时调 update() | STM32 每 20ms 先发 0x200 再发 0x201，以 0x201 为"一组完整"信号最简单；用该帧 `msg.timestamp` 算 dt。若丢 0x200 会把上一帧的 FL/FR 和新 RL/RR 配对，但累计 tick idempotent，单帧误配影响极小，可接受 |
 | 2026-07-04 | `can_bridge_node.py` 用平铺 import + `python3` 直跑，不建 colcon 包 | 全项目其它脚本都是平铺 import + 裸跑，无 `package.xml`/`setup.py`；为一个 node 单独搭 package 结构收益低。ground-truth 阶段靠 node 自带 2Hz pose 日志观察，不需要 `ros2 launch` |
+| 2026-07-04 | 电机控制先用 open-loop（`USE_PID=0`），PID 保留待 cmd_vel 阶段 | 遥控 + odometry 标定/drift 阶段不需要速度闭环；PID 对 odometry 无帮助（直接读 encoder），且闭环会补偿掉 Week4 要测量的 motion uncertainty。open-loop 也天然免疫 encoder 反向导致的 PID 正反馈 runaway。PID 代码用 `#if USE_PID` 完整保留，翻成 1 即恢复 |
+| 2026-07-04 | 急停门控从"清零后被覆盖"改为 `hb_ok` 门控整个控制更新 | 原逻辑 `motors_stop()` 之后控制块又立即重驱 PWM，导致 heartbeat 急停失效（断心跳也停不下来）。现在心跳超时时整个控制更新短路，电机保持 0；encoder_update 仍每 20ms 跑以维持 CAN ticks 与 16-bit overflow 追踪 |
 
 ---
 
