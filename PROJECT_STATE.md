@@ -1,7 +1,7 @@
 # SummerSLAM — Project State
 
 > 最后更新：2026-07-04
-> 当前阶段：Week 3 — x-drive forward kinematics 推导完成，odometry.py 已实现（pose integration 用 midpoint method），main.c 补了 MotorPosition enum 确认物理轮位映射；ps2_drive_test.py 补了 heartbeat 线程，encoder_monitor.py 编写完成；encoder 方向与 ENCODER_CPR 标定待实机验证
+> 当前阶段：Week 3 → Week 4 过渡 — odometry.py 已实现（midpoint pose integration），encoder 方向（四路全反 → ENCODER_SIGN 全 -1）与 ENCODER_CPR（实测 2779）已实机标定完成。下一步：Ground truth sanity check（正方形 + 原地转 360°）验证 vy/omega 方向，再接 can_bridge_node.py
 
 ---
 
@@ -136,8 +136,8 @@ Payload 格式：
 - [x] `odometry.py` 模块编写完成，独立于 CAN/ROS，`MOTOR_MAP`/`ENCODER_SIGN`/`ENCODER_CPR` 显式暴露为配置，smoke test（纯 vy 输入 → vx=0, ω=0）通过
 - [x] Motor index ↔ 物理轮位映射确认并落地：`main.c` 新增 `MotorPosition` enum (`MOTOR_FL=0, MOTOR_FR=1, MOTOR_RL=2, MOTOR_RR=3`)，`motors[]` 初始化、CAN 收发全部改用 enum 索引，跟 `odometry.py` 的 `MOTOR_MAP` 对齐
 - [x] `encoder_monitor.py` 编写完成：实时打印四路 encoder tick（从 baseline 起的 delta），配合 `ps2_drive_test.py` 在第二个终端跑，供 Encoder 方向标定用
-- [ ] Encoder 方向标定：纯 vy / 纯 ω 实机测试，确认 `ENCODER_SIGN` 是否需要翻转
-- [ ] `ENCODER_CPR` 实机标定：当前 2800 为理论值 (7 PPR × 4x quadrature × 100:1 gear)，未实测
+- [x] Encoder 方向标定（2026-07-04 实机）：直线前进时四路 encoder tick 全部递减，`ENCODER_SIGN` 四路全设 -1。**注意**：纯 vx 前进测试已完全确定四路符号，vy/omega 方向正确性只能靠 Ground truth test 验证，无法再靠 `ENCODER_SIGN` 修
+- [x] `ENCODER_CPR` 实机标定（2026-07-04）：四轮各手转 10 圈，FL 2779.5 / FR 2778.3 / RL 2778.7 / RR 2777.6，平均 2778.5，取整 **2779**（理论值 2800 偏高 ~0.8%，轮间极差仅 0.07%）。已更新 `odometry.py`；`main.c` 的 `#define ENCODER_CPR` 暂留 2800（只影响 PID RPM 反馈精度 ~0.8%，是否为此重烧待定）
 - [ ] Ground truth sanity check：正方形轨迹 + 原地转 360°，卷尺量实际终点位置对比代码输出
 - [ ] `can_bridge_node.py` 接入 `OdometryEstimator`，发布 ROS2 odom topic + TF
 
@@ -176,6 +176,9 @@ Payload 格式：
 | 2026-07-03 | Pose integration 用 midpoint method (`θ_mid = θ + ωdt/2`) | Plain Euler 在原地快速转弯时位移方向系统性偏差；heading error 比 translational error 更致命 |
 | 2026-07-03 | `ENCODER_CPR` 暂用理论值 2800，标定列为 TODO 而非阻塞项 | 先把 kinematics 代码跑通，标定可并行/稍后做，但显式记录，防止被误当成已标定值直接用于 Week4 |
 | 2026-07-03 | 确认 motor index 物理映射：TIM2(idx0)=FL, TIM3(idx1)=FR, TIM4(idx2)=RL, TIM5(idx3)=RR | review `main.c` 时发现物理映射从未显式写出，只存在于接线事实里；补了 `MotorPosition` enum + 注释，把 main.c、`odometry.py` 的 `MOTOR_MAP`、`ps2_drive_test.py` 的顺序统一成同一份 single source of truth |
+| 2026-07-04 | `ENCODER_SIGN` 四路全设 -1 | 实机直线前进时四路 encoder tick 全部递减；纯 vx 前进测试对每路符号是完全约束（每轮必须前进=正），四路一致翻负即可。副作用：vy/omega 也随之翻号，其方向正确性无法再靠 sign 修，只能靠 ground-truth test 验证 |
+| 2026-07-04 | `ENCODER_CPR` 用实测 2779 替换理论 2800 | 四轮各手转 10 圈实测：FL 2779.5/FR 2778.3/RL 2778.7/RR 2777.6，均值 2778.5 取整。轮间极差仅 0.07%，用单一全局值足够；理论值偏高 0.8% 属 N20 减速箱正常 |
+| 2026-07-04 | `main.c` 的 `ENCODER_CPR` 暂不同步改（留 2800） | STM32 侧该宏只用于 PID 的 RPM 反馈换算，0.8% 误差对速度环无实际影响；改它要再烧一次录，收益不值，待有其他固件改动时顺带更新 |
 
 ---
 
@@ -191,7 +194,7 @@ Payload 格式：
 - **CMake 手动添加源文件**：CubeMX regenerate 会覆盖 CMakeLists.txt，手动加的 mcp2515.c 条目会丢失，需重新添加。
 - **RPi WiFi DHCP 不分配 IPv4**：netplan 配置正确，wlan0 状态 UP 但无 IPv4 地址，只有 IPv6 link-local。`netplan apply` 后偶尔恢复。SSH 通过 IPv6 或缓存 session 维持。不影响 CAN / GPIO 开发。
 - **RPi 不是 5V tolerant**：RPi GPIO 输入最大 3.3V，不像 STM32 F411 有 FT pin。PS2 接收器、任何外设模块的 DATA 线输出如果是 5V 会烧 RPi GPIO。
-- **`ENCODER_CPR=2800` 是理论计算值**（7 PPR × 4x quadrature × 100:1 gear），不是实测标定值。便宜 N20 减速箱的 backlash / 编码磁环不均匀，实测值跟理论值差 1%~3% 很常见，标定前不要直接拿这个值算的 drift 数据下 Week4 的结论。
+- ~~**`ENCODER_CPR=2800` 是理论计算值**~~ **已标定 (2026-07-04)**：`odometry.py` 用实测 2779（四轮均值）。注意 `main.c` 侧仍是 2800（见决策记录，PID 反馈用，暂不改）；两处值不一致是有意为之，别当成 bug 又改回去。
 - **`can_bridge_node.py` import 路径已断**：文件顶部 `from can_bridge.protocol import ...` / `from can_bridge.can_interface import ...` 是包导入写法，但 `ros2_ws/src/` 下实际没有 `can_bridge/` 包目录——`protocol.py`/`can_interface.py`/`odometry.py` 都是平铺文件。现在跑 `can_bridge_node.py` 会直接 `ModuleNotFoundError`。留到 Task 5（集成 `OdometryEstimator`）时一并修（改成平铺 import 或补齐 ROS2 package 结构，两者选一）。
 - **Motor index ≠ 物理轮位，需要显式 MOTOR_MAP**：CAN 协议按 motor index (0~3) 传 encoder 数据，但 forward kinematics 公式用的是物理轮位 (fl/fr/rl/rr)。两者对应关系只能靠接线约定，不能从协议或代码反推。**已解决 (2026-07-03)**：`main.c` 里加了 `MotorPosition` enum (FL=0/FR=1/RL=2/RR=3)，`odometry.py` 的 `MOTOR_MAP` 保持一致，两边都不再用裸数字。
 

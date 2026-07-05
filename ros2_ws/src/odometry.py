@@ -15,11 +15,11 @@ Design notes (see PROJECT_STATE.md decision log, 2026-07-03):
     translational error in accumulated odometry drift.
   - MOTOR_MAP / ENCODER_SIGN are pulled out as explicit config so wiring
     changes don't require touching the math.
-  - ENCODER_CPR below is a *theoretical* value (7 PPR x 4x quadrature x
-    100:1 gearbox = 2800), NOT yet empirically calibrated. Treat any
-    drift/uncertainty numbers computed with it as provisional until a
-    physical calibration (rotate output shaft N turns, compare to raw
-    CNT delta) is done.
+  - ENCODER_CPR below was empirically calibrated 2026-07-04 (rotate each
+    output shaft 10 turns by hand, average the raw CNT delta across all
+    four wheels): measured 2779 vs theoretical 2800. ENCODER_SIGN was
+    calibrated the same day (all four wheels count down on forward drive
+    -> all -1).
 """
 
 import math
@@ -27,7 +27,10 @@ import math
 # ---- Physical / calibration constants ----
 WHEEL_RADIUS_M = 0.025       # 50mm diameter / 2
 CENTER_TO_WHEEL_M = 0.115    # R: center to wheel contact point
-ENCODER_CPR = 2800           # THEORETICAL (7 PPR * 4x quad * 100 gear). TODO: calibrate.
+ENCODER_CPR = 2779           # CALIBRATED 2026-07-04: 4-wheel avg of 10-rev hand turns
+                             # (FL 2779.5, FR 2778.3, RL 2778.7, RR 2777.6 -> 2778.5).
+                             # Theoretical was 2800 (7 PPR * 4x quad * 100 gear); measured
+                             # ~0.8% lower, spread across wheels only ~0.07%.
 
 # Motor index -> physical wheel position, matching ps2_drive_test.py's
 # inverse kinematics convention:
@@ -45,13 +48,21 @@ MOTOR_MAP = {
 # Per-motor encoder count sign correction. Flip an entry to -1 if that
 # wheel's raw tick count increases when the wheel is actually spinning
 # "backward" relative to the inverse-kinematics convention above (e.g.
-# mirrored mounting). Verify with a pure-vy and pure-omega test drive
-# BEFORE trusting odometry output -- do not guess these.
+# mirrored mounting).
+#
+# CALIBRATED 2026-07-04: driving straight forward (pure +vx, all four
+# wheels command +) made ALL FOUR raw tick counts DECREASE, so all four
+# are flipped to -1. NOTE: the pure-vx test fully determines these signs
+# (each wheel must read + on forward) -- there is no remaining freedom to
+# fix strafe/rotation via ENCODER_SIGN. vy (strafe) and omega (spin)
+# direction correctness must still be confirmed by the ground-truth test
+# (square path + 360 spin, Task 4). If those come out mirrored it's a
+# geometry/wiring issue, NOT re-tunable here.
 ENCODER_SIGN = {
-    0: 1,
-    1: 1,
-    2: 1,
-    3: 1,
+    0: -1,
+    1: -1,
+    2: -1,
+    3: -1,
 }
 
 
@@ -135,15 +146,17 @@ class OdometryEstimator:
 
 
 if __name__ == "__main__":
-    # Minimal smoke test: pure +vy motion for one 20ms step, with all four
-    # wheels ticking consistently with fl=+, fr=-, rl=-, rr=+ per the
-    # inverse-kinematics convention above. This only checks the math is
-    # internally consistent -- it is NOT a substitute for the real
-    # ground-truth test (square path / 360 degree spin with tape-measure
-    # verification) called out in PROJECT_STATE.md.
+    # Minimal smoke test: pure +vy motion for one 20ms step. After sign
+    # correction the wheel velocities should be fl=+, fr=-, rl=-, rr=+ per
+    # the inverse-kinematics convention above. Since ENCODER_SIGN is now all
+    # -1 (calibrated 2026-07-04), the RAW ticks fed in are the negation of
+    # those post-correction signs, i.e. fl=-, fr=+, rl=+, rr=-. This only
+    # checks the math is internally consistent -- it is NOT a substitute for
+    # the real ground-truth test (square path / 360 degree spin with
+    # tape-measure verification) called out in PROJECT_STATE.md.
     odo = OdometryEstimator()
     odo.update({0: 0, 1: 0, 2: 0, 3: 0}, timestamp=0.0)
-    result = odo.update({0: 280, 1: -280, 2: -280, 3: 280}, timestamp=0.02)
+    result = odo.update({0: -280, 1: 280, 2: 280, 3: -280}, timestamp=0.02)
     x, y, theta, vx, vy, omega = result
     print(f"x={x:.4f} y={y:.4f} theta={theta:.4f} vx={vx:.4f} vy={vy:.4f} omega={omega:.4f}")
     assert abs(vx) < 1e-9 and abs(omega) < 1e-9 and vy > 0, "pure-vy sanity check failed"
