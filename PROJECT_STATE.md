@@ -1,7 +1,7 @@
 # SummerSLAM — Project State
 
 > 最后更新：2026-07-04
-> 当前阶段：Week 3 → Week 4 过渡 — odometry.py 已实现（midpoint pose integration），encoder 方向（四路全反 → ENCODER_SIGN 全 -1）与 ENCODER_CPR（实测 2779）已实机标定完成。下一步：Ground truth sanity check（正方形 + 原地转 360°）验证 vy/omega 方向，再接 can_bridge_node.py
+> 当前阶段：Week 3 → Week 4 过渡 — odometry.py 已标定（ENCODER_SIGN 全 -1，ENCODER_CPR 2779），`can_bridge_node.py` 已接入 `OdometryEstimator` 并发布 odom+TF。**下一步（唯一卡点）：Ground truth sanity check（正方形 + 原地转 360°）实机验证 vy/omega 方向**，通过后即进 Week4 drift 实验
 
 ---
 
@@ -138,8 +138,8 @@ Payload 格式：
 - [x] `encoder_monitor.py` 编写完成：实时打印四路 encoder tick（从 baseline 起的 delta），配合 `ps2_drive_test.py` 在第二个终端跑，供 Encoder 方向标定用
 - [x] Encoder 方向标定（2026-07-04 实机）：直线前进时四路 encoder tick 全部递减，`ENCODER_SIGN` 四路全设 -1。**注意**：纯 vx 前进测试已完全确定四路符号，vy/omega 方向正确性只能靠 Ground truth test 验证，无法再靠 `ENCODER_SIGN` 修
 - [x] `ENCODER_CPR` 实机标定（2026-07-04）：四轮各手转 10 圈，FL 2779.5 / FR 2778.3 / RL 2778.7 / RR 2777.6，平均 2778.5，取整 **2779**（理论值 2800 偏高 ~0.8%，轮间极差仅 0.07%）。已更新 `odometry.py`；`main.c` 的 `#define ENCODER_CPR` 暂留 2800（只影响 PID RPM 反馈精度 ~0.8%，是否为此重烧待定）
-- [ ] Ground truth sanity check：正方形轨迹 + 原地转 360°，卷尺量实际终点位置对比代码输出
-- [ ] `can_bridge_node.py` 接入 `OdometryEstimator`，发布 ROS2 odom topic + TF
+- [ ] Ground truth sanity check：正方形轨迹 + 原地转 360°，卷尺量实际终点位置对比代码输出（**待实机**，用 `can_bridge_node.py` 的 pose 日志观察）
+- [x] `can_bridge_node.py` 接入 `OdometryEstimator`（2026-07-04）：收齐 0x200+0x201 后调 `update()`（dt 用 CAN 帧时间戳），发布 `nav_msgs/Odometry` on `odom` + `odom→base_link` TF；另加 ~2Hz 节流 pose 日志供 ground-truth 观察。import 改成平铺式（跟全项目一致），`python3 can_bridge_node.py` 直接跑。**代码完成，待实机验证**
 
 ---
 
@@ -179,6 +179,8 @@ Payload 格式：
 | 2026-07-04 | `ENCODER_SIGN` 四路全设 -1 | 实机直线前进时四路 encoder tick 全部递减；纯 vx 前进测试对每路符号是完全约束（每轮必须前进=正），四路一致翻负即可。副作用：vy/omega 也随之翻号，其方向正确性无法再靠 sign 修，只能靠 ground-truth test 验证 |
 | 2026-07-04 | `ENCODER_CPR` 用实测 2779 替换理论 2800 | 四轮各手转 10 圈实测：FL 2779.5/FR 2778.3/RL 2778.7/RR 2777.6，均值 2778.5 取整。轮间极差仅 0.07%，用单一全局值足够；理论值偏高 0.8% 属 N20 减速箱正常 |
 | 2026-07-04 | `main.c` 的 `ENCODER_CPR` 暂不同步改（留 2800） | STM32 侧该宏只用于 PID 的 RPM 反馈换算，0.8% 误差对速度环无实际影响；改它要再烧一次录，收益不值，待有其他固件改动时顺带更新 |
+| 2026-07-04 | odometry 触发时机：收到 0x201（完成 0/1/2/3 全套）时调 update() | STM32 每 20ms 先发 0x200 再发 0x201，以 0x201 为"一组完整"信号最简单；用该帧 `msg.timestamp` 算 dt。若丢 0x200 会把上一帧的 FL/FR 和新 RL/RR 配对，但累计 tick idempotent，单帧误配影响极小，可接受 |
+| 2026-07-04 | `can_bridge_node.py` 用平铺 import + `python3` 直跑，不建 colcon 包 | 全项目其它脚本都是平铺 import + 裸跑，无 `package.xml`/`setup.py`；为一个 node 单独搭 package 结构收益低。ground-truth 阶段靠 node 自带 2Hz pose 日志观察，不需要 `ros2 launch` |
 
 ---
 
@@ -195,7 +197,7 @@ Payload 格式：
 - **RPi WiFi DHCP 不分配 IPv4**：netplan 配置正确，wlan0 状态 UP 但无 IPv4 地址，只有 IPv6 link-local。`netplan apply` 后偶尔恢复。SSH 通过 IPv6 或缓存 session 维持。不影响 CAN / GPIO 开发。
 - **RPi 不是 5V tolerant**：RPi GPIO 输入最大 3.3V，不像 STM32 F411 有 FT pin。PS2 接收器、任何外设模块的 DATA 线输出如果是 5V 会烧 RPi GPIO。
 - ~~**`ENCODER_CPR=2800` 是理论计算值**~~ **已标定 (2026-07-04)**：`odometry.py` 用实测 2779（四轮均值）。注意 `main.c` 侧仍是 2800（见决策记录，PID 反馈用，暂不改）；两处值不一致是有意为之，别当成 bug 又改回去。
-- **`can_bridge_node.py` import 路径已断**：文件顶部 `from can_bridge.protocol import ...` / `from can_bridge.can_interface import ...` 是包导入写法，但 `ros2_ws/src/` 下实际没有 `can_bridge/` 包目录——`protocol.py`/`can_interface.py`/`odometry.py` 都是平铺文件。现在跑 `can_bridge_node.py` 会直接 `ModuleNotFoundError`。留到 Task 5（集成 `OdometryEstimator`）时一并修（改成平铺 import 或补齐 ROS2 package 结构，两者选一）。
+- ~~**`can_bridge_node.py` import 路径已断**~~ **已修 (2026-07-04)**：改成平铺 import（`from protocol import`、`from can_interface import`、`from odometry import`），跟全项目其它脚本一致。整个 `ros2_ws/src/` 没有 `package.xml`/`setup.py`，本来就不是 colcon 包，全部脚本都靠 `python3 xxx.py` 跑（node 需先 `source /opt/ros/jazzy/setup.bash`）。若将来要 `ros2 launch` / 参数管理再补齐 package 结构。
 - **Motor index ≠ 物理轮位，需要显式 MOTOR_MAP**：CAN 协议按 motor index (0~3) 传 encoder 数据，但 forward kinematics 公式用的是物理轮位 (fl/fr/rl/rr)。两者对应关系只能靠接线约定，不能从协议或代码反推。**已解决 (2026-07-03)**：`main.c` 里加了 `MotorPosition` enum (FL=0/FR=1/RL=2/RR=3)，`odometry.py` 的 `MOTOR_MAP` 保持一致，两边都不再用裸数字。
 
 ---
