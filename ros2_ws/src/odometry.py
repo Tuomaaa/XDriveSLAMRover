@@ -129,10 +129,23 @@ class OdometryEstimator:
         rl, rr = wheel_vel["rl"], wheel_vel["rr"]
 
         # Forward kinematics (derived by summing/differencing the four
-        # inverse-kinematics equations -- see PROJECT_STATE.md):
+        # inverse-kinematics equations -- see PROJECT_STATE.md).
+        #
+        # vy and omega are NEGATED relative to the pure algebraic inverse of
+        # the drive-side inverse kinematics. CALIBRATED 2026-07-06 (ground
+        # truth, after the RL/RR encoder-map fix): with the plain inverse,
+        # physical LEFT strafe read as -vy and physical CCW spin read as
+        # -omega, while vx (forward) was already correct. That "vx right,
+        # vy+omega both mirror-flipped" pattern is a left-right frame mirror:
+        # the drive inverse-kinematics convention has +vy pointing right and
+        # +omega going CW. ENCODER_SIGN is fully pinned by the forward test
+        # and MOTOR_MAP is pinned by the physical encoder harness, so this
+        # frame flip can only live here. Negating vy/omega aligns odometry
+        # output to REP-103 (x fwd, y LEFT, z up / CCW positive). vx is left
+        # untouched -- it was already REP-103-correct.
         vx = (fl + fr + rl + rr) / 4.0
-        vy = (fl - fr + rr - rl) / 4.0
-        omega = (fl - fr - rr + rl) / (4.0 * CENTER_TO_WHEEL_M)
+        vy = -(fl - fr + rr - rl) / 4.0
+        omega = -(fl - fr - rr + rl) / (4.0 * CENTER_TO_WHEEL_M)
 
         # Midpoint pose integration: rotate this step's body-frame
         # displacement by the heading at the *middle* of the interval,
@@ -156,17 +169,21 @@ class OdometryEstimator:
 
 
 if __name__ == "__main__":
-    # Minimal smoke test: pure +vy (left strafe) motion for one 20ms step.
-    # The target post-correction wheel velocities for +vy are fl=+, fr=-,
-    # rl=-, rr=+ (from the inverse kinematics). We build the RAW tick input
-    # by inverting back through ENCODER_SIGN and MOTOR_MAP, so this test
-    # stays correct no matter how those are wired (don't hardcode per-index
-    # ticks -- that silently breaks when the map/sign changes). This only
-    # checks the math is internally consistent -- it is NOT a substitute for
-    # the real ground-truth test (square path / 360 degree spin with
-    # tape-measure verification) called out in PROJECT_STATE.md.
+    # Minimal smoke test: physical LEFT strafe for one 20ms step, expecting
+    # REP-103 output vy > 0 (and no channel leak: vx = omega = 0).
+    #
+    # Under the DRIVE inverse kinematics, physical left strafe is the "-vy"
+    # wheel pattern (fl=-, fr=+, rl=+, rr=-), because the drive convention's
+    # +vy points right. The forward kinematics negates vy/omega to report
+    # REP-103 (y = LEFT), so this pattern must come back as vy > 0. We build
+    # the RAW tick input by inverting back through ENCODER_SIGN and MOTOR_MAP,
+    # so the test stays correct no matter how those are wired (don't hardcode
+    # per-index ticks -- that silently breaks when the map/sign changes).
+    # This only checks the math is internally consistent -- it is NOT a
+    # substitute for the real ground-truth test (square path / 360 degree
+    # spin with tape-measure verification) called out in PROJECT_STATE.md.
     STEP = 280
-    wheel_target = {"fl": +STEP, "fr": -STEP, "rl": -STEP, "rr": +STEP}
+    wheel_target = {"fl": -STEP, "fr": +STEP, "rl": +STEP, "rr": -STEP}
     raw = {i: ENCODER_SIGN[i] * wheel_target[MOTOR_MAP[i]] for i in MOTOR_MAP}
 
     odo = OdometryEstimator()
@@ -174,5 +191,5 @@ if __name__ == "__main__":
     result = odo.update(raw, timestamp=0.02)
     x, y, theta, vx, vy, omega = result
     print(f"x={x:.4f} y={y:.4f} theta={theta:.4f} vx={vx:.4f} vy={vy:.4f} omega={omega:.4f}")
-    assert abs(vx) < 1e-9 and abs(omega) < 1e-9 and vy > 0, "pure-vy sanity check failed"
-    print("smoke test OK: pure +vy in, vx=0 and omega=0 out, as expected")
+    assert abs(vx) < 1e-9 and abs(omega) < 1e-9 and vy > 0, "left-strafe sanity check failed"
+    print("smoke test OK: physical left strafe in, REP-103 vy>0 and vx=omega=0 out")
