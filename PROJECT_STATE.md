@@ -1,7 +1,7 @@
 # SummerSLAM — Project State
 
-> 最后更新：2026-07-04
-> 当前阶段：Week 3 → Week 4 过渡 — odometry.py 已标定（ENCODER_SIGN 全 -1，ENCODER_CPR 2779），`can_bridge_node.py` 已接入 `OdometryEstimator` 并发布 odom+TF。发现 STM32 侧 PID runaway（encoder 反向→正反馈），已改为 open-loop（`USE_PID=0`，PID 保留待用），并修复 heartbeat 急停失效。**下一步：重新烧录 STM32 验证不再 runaway → 再做 Ground truth sanity check（正方形 + 原地转 360°）验证 vy/omega 方向 → Week4 drift**
+> 最后更新：2026-07-06
+> 当前阶段：Week 3 → Week 4 过渡 — odometry.py 已标定（ENCODER_SIGN 全 -1，ENCODER_CPR 2779），`can_bridge_node.py` 已接入 `OdometryEstimator` 并发布 odom+TF。发现 STM32 侧 PID runaway（encoder 反向→正反馈），已改为 open-loop（`USE_PID=0`，PID 保留待用），并修复 heartbeat 急停失效。已修 RL/RR encoder 接反（`MOTOR_MAP` index2/3 对调）。**下一步：实机方向复验（原地转只 theta 变 / 横移只 y 变 / 前进只 x 变）→ Ground truth 正方形 + 原地转 360° 卷尺对比 → Week4 drift**
 
 ---
 
@@ -142,7 +142,8 @@ Payload 格式：
 - [x] `encoder_monitor.py` 编写完成：实时打印四路 encoder tick（从 baseline 起的 delta），配合 `ps2_drive_test.py` 在第二个终端跑，供 Encoder 方向标定用
 - [x] Encoder 方向标定（2026-07-04 实机）：直线前进时四路 encoder tick 全部递减，`ENCODER_SIGN` 四路全设 -1。**注意**：纯 vx 前进测试已完全确定四路符号，vy/omega 方向正确性只能靠 Ground truth test 验证，无法再靠 `ENCODER_SIGN` 修
 - [x] `ENCODER_CPR` 实机标定（2026-07-04）：四轮各手转 10 圈，FL 2779.5 / FR 2778.3 / RL 2778.7 / RR 2777.6，平均 2778.5，取整 **2779**（理论值 2800 偏高 ~0.8%，轮间极差仅 0.07%）。已更新 `odometry.py`；`main.c` 的 `#define ENCODER_CPR` 暂留 2800（只影响 PID RPM 反馈精度 ~0.8%，是否为此重烧待定）
-- [ ] Ground truth sanity check：正方形轨迹 + 原地转 360°，卷尺量实际终点位置对比代码输出（**待实机**，用 `can_bridge_node.py` 的 pose 日志观察）
+- [x] **发现并修复 RL/RR encoder 接反（2026-07-06）**：实机方向验证时 vy 和 omega 通道互换（原地转读成 y、横移读成 omega），vx 正常。用 `encoder_monitor.py` 逐个手转物理轮确认是 RL/RR 两路 encoder 物理接反（index 2 在 RR 轮、index 3 在 RL 轮）。修法：`odometry.py` 的 `MOTOR_MAP` 把 index 2↔3 标签对调（`{0:fl,1:fr,2:rr,3:rl}`），只改 odometry 不用重烧。smoke test 顺手重写成按 `ENCODER_SIGN`/`MOTOR_MAP` 反推构造输入（不再硬编码 per-index tick），改配置不会再悄悄失效
+- [ ] Ground truth sanity check：正方形轨迹 + 原地转 360°，卷尺量实际终点位置对比代码输出（**待实机**，用 `can_bridge_node.py` 的 pose 日志观察）。先做方向复验：原地转只 theta 变、横移只 y 变、前进只 x 变
 - [x] `can_bridge_node.py` 接入 `OdometryEstimator`（2026-07-04）：收齐 0x200+0x201 后调 `update()`（dt 用 CAN 帧时间戳），发布 `nav_msgs/Odometry` on `odom` + `odom→base_link` TF；另加 ~2Hz 节流 pose 日志供 ground-truth 观察。import 改成平铺式（跟全项目一致），`python3 can_bridge_node.py` 直接跑。**代码完成，待实机验证**
 
 ---
@@ -187,6 +188,7 @@ Payload 格式：
 | 2026-07-04 | `can_bridge_node.py` 用平铺 import + `python3` 直跑，不建 colcon 包 | 全项目其它脚本都是平铺 import + 裸跑，无 `package.xml`/`setup.py`；为一个 node 单独搭 package 结构收益低。ground-truth 阶段靠 node 自带 2Hz pose 日志观察，不需要 `ros2 launch` |
 | 2026-07-04 | 电机控制先用 open-loop（`USE_PID=0`），PID 保留待 cmd_vel 阶段 | 遥控 + odometry 标定/drift 阶段不需要速度闭环；PID 对 odometry 无帮助（直接读 encoder），且闭环会补偿掉 Week4 要测量的 motion uncertainty。open-loop 也天然免疫 encoder 反向导致的 PID 正反馈 runaway。PID 代码用 `#if USE_PID` 完整保留，翻成 1 即恢复 |
 | 2026-07-04 | 急停门控从"清零后被覆盖"改为 `hb_ok` 门控整个控制更新 | 原逻辑 `motors_stop()` 之后控制块又立即重驱 PWM，导致 heartbeat 急停失效（断心跳也停不下来）。现在心跳超时时整个控制更新短路，电机保持 0；encoder_update 仍每 20ms 跑以维持 CAN ticks 与 16-bit overflow 追踪 |
+| 2026-07-06 | `MOTOR_MAP` 后两位（index 2/3）故意与 drive 侧不一致 | 实测 RL/RR 的 encoder 线束物理接反，与 motor 线束是两套独立接线。`MOTOR_MAP` 反映的是 **encoder 接线**（index2=rr, index3=rl），不能为"对齐" `main.c` 的 `MotorPosition` enum 而改回去。判据：vy/omega 互换而 vx 正常 = 轮位映射交换，非 sign/公式问题 |
 
 ---
 
@@ -204,7 +206,8 @@ Payload 格式：
 - **RPi 不是 5V tolerant**：RPi GPIO 输入最大 3.3V，不像 STM32 F411 有 FT pin。PS2 接收器、任何外设模块的 DATA 线输出如果是 5V 会烧 RPi GPIO。
 - ~~**`ENCODER_CPR=2800` 是理论计算值**~~ **已标定 (2026-07-04)**：`odometry.py` 用实测 2779（四轮均值）。注意 `main.c` 侧仍是 2800（见决策记录，PID 反馈用，暂不改）；两处值不一致是有意为之，别当成 bug 又改回去。
 - ~~**`can_bridge_node.py` import 路径已断**~~ **已修 (2026-07-04)**：改成平铺 import（`from protocol import`、`from can_interface import`、`from odometry import`），跟全项目其它脚本一致。整个 `ros2_ws/src/` 没有 `package.xml`/`setup.py`，本来就不是 colcon 包，全部脚本都靠 `python3 xxx.py` 跑（node 需先 `source /opt/ros/jazzy/setup.bash`）。若将来要 `ros2 launch` / 参数管理再补齐 package 结构。
-- **Motor index ≠ 物理轮位，需要显式 MOTOR_MAP**：CAN 协议按 motor index (0~3) 传 encoder 数据，但 forward kinematics 公式用的是物理轮位 (fl/fr/rl/rr)。两者对应关系只能靠接线约定，不能从协议或代码反推。**已解决 (2026-07-03)**：`main.c` 里加了 `MotorPosition` enum (FL=0/FR=1/RL=2/RR=3)，`odometry.py` 的 `MOTOR_MAP` 保持一致，两边都不再用裸数字。
+- **Motor index ≠ 物理轮位，需要显式 MOTOR_MAP**：CAN 协议按 motor index (0~3) 传 encoder 数据，但 forward kinematics 公式用的是物理轮位 (fl/fr/rl/rr)。两者对应关系只能靠接线约定，不能从协议或代码反推。`main.c` 里加了 `MotorPosition` enum (FL=0/FR=1/RL=2/RR=3) 描述 **motor/drive 接线**。
+- **⚠️ encoder 接线 ≠ motor 接线，`MOTOR_MAP` 后两位与 enum 不一致是对的 (2026-07-06)**：实测 RL/RR 的 encoder 物理接反，所以 `odometry.py` 的 `MOTOR_MAP` 是 `{0:fl,1:fr,2:rr,3:rl}`，index 2/3 跟 `main.c` 的 `MotorPosition` enum（motor 侧）**故意相反**。encoder 与 motor 是两套独立线束，不要为"统一"把它改回去。诊断判据：**vy/omega 互换而 vx 正常 = 轮位映射交换**（不是 sign、不是公式）。
 
 ---
 

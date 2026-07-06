@@ -32,17 +32,27 @@ ENCODER_CPR = 2779           # CALIBRATED 2026-07-04: 4-wheel avg of 10-rev hand
                              # Theoretical was 2800 (7 PPR * 4x quad * 100 gear); measured
                              # ~0.8% lower, spread across wheels only ~0.07%.
 
-# Motor index -> physical wheel position, matching ps2_drive_test.py's
-# inverse kinematics convention:
+# Encoder index -> physical wheel position.
+#
+# This map reflects the ENCODER wiring harness, which is INDEPENDENT of the
+# motor/drive wiring. On the drive side (main.c MotorPosition enum,
+# ps2_drive_test.py inverse kinematics) index 0/1/2/3 = fl/fr/rl/rr:
 #   fl = vx + vy + omega*R
 #   fr = vx - vy - omega*R
 #   rl = vx - vy + omega*R
 #   rr = vx + vy - omega*R
+# but CALIBRATED 2026-07-06 (hand-spin each wheel, watch encoder_monitor):
+# the REAR encoders are physically swapped -- encoder index 2 sits on the
+# RR wheel and index 3 on the RL wheel. Symptom before the fix was vy and
+# omega swapped (spin-in-place read as y, strafe read as omega) while vx
+# was fine. So indices 2/3 below are DELIBERATELY the opposite of the drive
+# order; do NOT "align" them back to the enum without re-checking the
+# encoder harness.
 MOTOR_MAP = {
     0: "fl",
     1: "fr",
-    2: "rl",
-    3: "rr",
+    2: "rr",   # index 2 encoder is physically on the RR wheel
+    3: "rl",   # index 3 encoder is physically on the RL wheel
 }
 
 # Per-motor encoder count sign correction. Flip an entry to -1 if that
@@ -146,17 +156,22 @@ class OdometryEstimator:
 
 
 if __name__ == "__main__":
-    # Minimal smoke test: pure +vy motion for one 20ms step. After sign
-    # correction the wheel velocities should be fl=+, fr=-, rl=-, rr=+ per
-    # the inverse-kinematics convention above. Since ENCODER_SIGN is now all
-    # -1 (calibrated 2026-07-04), the RAW ticks fed in are the negation of
-    # those post-correction signs, i.e. fl=-, fr=+, rl=+, rr=-. This only
+    # Minimal smoke test: pure +vy (left strafe) motion for one 20ms step.
+    # The target post-correction wheel velocities for +vy are fl=+, fr=-,
+    # rl=-, rr=+ (from the inverse kinematics). We build the RAW tick input
+    # by inverting back through ENCODER_SIGN and MOTOR_MAP, so this test
+    # stays correct no matter how those are wired (don't hardcode per-index
+    # ticks -- that silently breaks when the map/sign changes). This only
     # checks the math is internally consistent -- it is NOT a substitute for
     # the real ground-truth test (square path / 360 degree spin with
     # tape-measure verification) called out in PROJECT_STATE.md.
+    STEP = 280
+    wheel_target = {"fl": +STEP, "fr": -STEP, "rl": -STEP, "rr": +STEP}
+    raw = {i: ENCODER_SIGN[i] * wheel_target[MOTOR_MAP[i]] for i in MOTOR_MAP}
+
     odo = OdometryEstimator()
-    odo.update({0: 0, 1: 0, 2: 0, 3: 0}, timestamp=0.0)
-    result = odo.update({0: -280, 1: 280, 2: 280, 3: -280}, timestamp=0.02)
+    odo.update({i: 0 for i in MOTOR_MAP}, timestamp=0.0)
+    result = odo.update(raw, timestamp=0.02)
     x, y, theta, vx, vy, omega = result
     print(f"x={x:.4f} y={y:.4f} theta={theta:.4f} vx={vx:.4f} vy={vy:.4f} omega={omega:.4f}")
     assert abs(vx) < 1e-9 and abs(omega) < 1e-9 and vy > 0, "pure-vy sanity check failed"
