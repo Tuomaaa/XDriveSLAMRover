@@ -190,6 +190,8 @@ Payload 格式：
 | 2026-07-04 | 急停门控从"清零后被覆盖"改为 `hb_ok` 门控整个控制更新 | 原逻辑 `motors_stop()` 之后控制块又立即重驱 PWM，导致 heartbeat 急停失效（断心跳也停不下来）。现在心跳超时时整个控制更新短路，电机保持 0；encoder_update 仍每 20ms 跑以维持 CAN ticks 与 16-bit overflow 追踪 |
 | 2026-07-06 | `MOTOR_MAP` 后两位（index 2/3）故意与 drive 侧不一致 | 实测 RL/RR 的 encoder 线束物理接反，与 motor 线束是两套独立接线。`MOTOR_MAP` 反映的是 **encoder 接线**（index2=rr, index3=rl），不能为"对齐" `main.c` 的 `MotorPosition` enum 而改回去。判据：vy/omega 互换而 vx 正常 = 轮位映射交换，非 sign/公式问题 |
 | 2026-07-06 | forward kinematics 的 `vy`/`omega` 输出翻号，对齐 REP-103 | RL/RR map 修好后方向复验：横移左读成 -vy、CCW 读成 -omega，而 vx（前进）正常。「vx 对、vy+omega 同时反」= 左右镜像，说明 drive 侧逆解约定里 +vy 指向右、+omega 是 CW。`ENCODER_SIGN` 被前进测试钉死、`MOTOR_MAP` 被物理接线钉死，这个 frame 镜像只能在输出端修：`odometry.py` 里 `vy`/`omega` 前加负号，vx 不动（本就 REP-103 正确）。改的是**输出坐标约定**，不是 drive 侧命令约定（遥控手感是另一码事，见"不在本次范围"）|
+| 2026-07-06 | `odometry.py` 平移补 `√2`（`TRANSLATION_SCALE`），旋转不动 | Task4 海绵 ground-truth（`data/Week4 Trials.xlsx`）：前进+横移 odom 都读实测的 ~0.74，而原地转读 ~1.0。这个"平移偏低、旋转正常"= X-drive 45° 轮的 `cos45=1/√2=0.707` 投影因子在**未归一化逆解**里缺失（drive 侧 `PS2_Drive_Test.py` 与本文件都用系数=1）；旋转项用 `ωR` 不带投影故不受影响。geometry 保证 + 实测 0.74 双重支持。修法：`vx,vy` 各乘 √2，omega 不动。**drive 侧逆解暂不改**（只影响遥控速度标定，不影响方向；cmd_vel 阶段再统一）。剩余 0.74→0.707 的 ~5% 是海绵打滑/CPR 小残差，待硬地或大海绵长距复测再抠 |
+| 2026-07-06 | `PS2_Drive_Test.py` 加 D-pad 微调（`MICRO_RPM=50`） | 遥控摇杆太粗，ground-truth 时对不准地面标记。方向键 上/下=前后、左/右=横移，叠加一个固定小 RPM crawl 在摇杆之上（摇杆归中时即纯慢速微调）。body-frame 约定与摇杆一致（+vx 前、+vy 左）。用 `PS2.is_pressed(btn1, BTN_*)` 读，active-low |
 
 ---
 

@@ -4,6 +4,7 @@ PS2 → CAN velocity command with x-drive kinematics.
 Left stick Y  → vx (forward/backward)
 Left stick X  → vy (left/right strafe)
 Right stick X → omega (rotation)
+D-pad         → fine-adjust crawl (up/down=fwd/back, left/right=strafe)
 
 X-drive kinematics:
     motor0 = vx + vy + omega
@@ -20,10 +21,12 @@ import can
 import struct
 import threading
 import time
-from PS2 import PS2Controller
+from PS2 import PS2Controller, BTN_UP, BTN_DOWN, BTN_LEFT, BTN_RIGHT
 
 # ── Config ──
 MAX_RPM = 200          # max RPM per motor
+MICRO_RPM = 50         # D-pad fine-adjust crawl speed (per wheel), for nudging
+                       # the robot onto floor marks -- sticks are too coarse
 DEADZONE = 15          # joystick center deadzone (around 128)
 SEND_INTERVAL = 0.05   # 50ms = 20Hz
 HEARTBEAT_INTERVAL = 0.1   # 100ms, well under STM32's 200ms timeout
@@ -69,6 +72,7 @@ def main():
     print("PS2 X-Drive Test — Ctrl+C to stop")
     print(f"Max RPM: ±{MAX_RPM}")
     print("Left stick: move  |  Right stick X: rotate")
+    print(f"D-pad: fine-adjust ±{MICRO_RPM} RPM (up/down=fwd/back, left/right=strafe)")
     print(f"Heartbeat: 0x300 every {int(HEARTBEAT_INTERVAL*1000)}ms")
 
     try:
@@ -84,6 +88,20 @@ def main():
             vx    = -map_axis(data['ly'])    # forward/backward
             vy    =  -map_axis(data['lx'])    # left/right strafe
             omega =  map_axis(data['rx'])    # rotation
+
+            # D-pad fine adjustment: adds a small fixed-RPM crawl on top of the
+            # sticks so you can nudge the robot onto a mark. With the sticks
+            # centered it gives pure slow motion. Same body-frame convention as
+            # the sticks (+vx fwd, +vy left); held = continuous, tapped = pulse.
+            micro = MICRO_RPM / MAX_RPM
+            if ps2.is_pressed(data['btn1'], BTN_UP):
+                vx += micro
+            if ps2.is_pressed(data['btn1'], BTN_DOWN):
+                vx -= micro
+            if ps2.is_pressed(data['btn1'], BTN_LEFT):
+                vy += micro
+            if ps2.is_pressed(data['btn1'], BTN_RIGHT):
+                vy -= micro
 
             # X-drive inverse kinematics
             m0 = (vx + vy + omega) * MAX_RPM

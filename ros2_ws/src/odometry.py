@@ -27,6 +27,17 @@ import math
 # ---- Physical / calibration constants ----
 WHEEL_RADIUS_M = 0.025       # 50mm diameter / 2
 CENTER_TO_WHEEL_M = 0.115    # R: center to wheel contact point
+
+# X-drive wheels sit at 45deg, so a wheel driving pure +vx contributes only
+# cos(45)=1/sqrt(2) of its surface speed to vx. The drive-side inverse
+# kinematics (PS2_Drive_Test.py) -- which the forward kinematics below inverts
+# -- uses the un-normalized form (coefficient 1, not 1/sqrt2), so the
+# translation terms come out low by 1/sqrt(2). CALIBRATED 2026-07-06 (foam
+# ground truth, data/Week4 Trials.xlsx): forward AND strafe read ~0.74x the
+# tape-measured distance while in-place rotation read ~1.0 -- exactly the
+# missing cos45 factor (rotation uses R and is unaffected). Multiply the
+# translation output by sqrt(2) to correct; omega is left untouched.
+TRANSLATION_SCALE = math.sqrt(2)
 ENCODER_CPR = 2779           # CALIBRATED 2026-07-04: 4-wheel avg of 10-rev hand turns
                              # (FL 2779.5, FR 2778.3, RL 2778.7, RR 2777.6 -> 2778.5).
                              # Theoretical was 2800 (7 PPR * 4x quad * 100 gear); measured
@@ -142,9 +153,12 @@ class OdometryEstimator:
         # and MOTOR_MAP is pinned by the physical encoder harness, so this
         # frame flip can only live here. Negating vy/omega aligns odometry
         # output to REP-103 (x fwd, y LEFT, z up / CCW positive). vx is left
-        # untouched -- it was already REP-103-correct.
-        vx = (fl + fr + rl + rr) / 4.0
-        vy = -(fl - fr + rr - rl) / 4.0
+        # sign-untouched -- it was already REP-103-correct.
+        #
+        # Both vx and vy also get TRANSLATION_SCALE (sqrt2) for the missing
+        # 45deg cos factor (see constant above); omega does not.
+        vx = (fl + fr + rl + rr) / 4.0 * TRANSLATION_SCALE
+        vy = -(fl - fr + rr - rl) / 4.0 * TRANSLATION_SCALE
         omega = -(fl - fr - rr + rl) / (4.0 * CENTER_TO_WHEEL_M)
 
         # Midpoint pose integration: rotate this step's body-frame
