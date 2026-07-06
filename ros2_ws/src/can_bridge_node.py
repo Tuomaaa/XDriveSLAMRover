@@ -35,6 +35,17 @@ from can_interface import CanInterface
 from odometry import OdometryEstimator
 
 
+# RPi -> STM32 IDs. SocketCAN loops frames from other local sockets back to
+# us; these are commands we send, not telemetry to decode, so we skip them.
+_OUTGOING_IDS = frozenset((
+    MsgId.VEL_CMD,    # 0x100
+    MsgId.HEARTBEAT,  # 0x300
+    MsgId.PID_KP,     # 0x400
+    MsgId.PID_KI,     # 0x401
+    MsgId.PID_KD,     # 0x402
+))
+
+
 class CanBridgeNode(Node):
 
     def __init__(self):
@@ -87,6 +98,13 @@ class CanBridgeNode(Node):
     def _can_recv_callback(self):
         msg = self._can.recv(timeout=0)
         if msg is None:
+            return
+
+        # SocketCAN echoes frames sent by other local sockets (e.g. the
+        # PS2 driver transmitting 0x100/0x300) onto this socket too. Those
+        # are RPi->STM32 commands, not something we decode -- skip them
+        # quietly so they don't flood the log as "unknown ID".
+        if msg.arbitration_id in _OUTGOING_IDS:
             return
 
         result = decode(msg.arbitration_id, msg.data)
