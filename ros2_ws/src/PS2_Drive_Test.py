@@ -21,12 +21,12 @@ import can
 import struct
 import threading
 import time
-from PS2 import PS2Controller, BTN_UP, BTN_DOWN, BTN_LEFT, BTN_RIGHT
+from PS2 import PS2Controller, BTN_UP, BTN_DOWN, BTN_LEFT, BTN_RIGHT, BTN_TRIANGLE, BTN_CROSS
 
 # ── Config ──
 MAX_RPM = 200          # max RPM per motor
-MICRO_RPM = 50         # D-pad fine-adjust crawl speed (per wheel), for nudging
-                       # the robot onto floor marks -- sticks are too coarse
+MICRO_DUTY = 25        # D-pad fine-adjust crawl speed in % duty cycle (10–100)
+                       # adjustable live with Triangle (+5%) / Cross (-5%)
 DEADZONE = 15          # joystick center deadzone (around 128)
 SEND_INTERVAL = 0.05   # 50ms = 20Hz
 HEARTBEAT_INTERVAL = 0.1   # 100ms, well under STM32's 200ms timeout
@@ -69,10 +69,14 @@ def main():
     hb_thread = threading.Thread(target=heartbeat_loop, args=(bus, hb_stop), daemon=True)
     hb_thread.start()
 
+    micro_duty = MICRO_DUTY           # live-adjustable D-pad speed (% of MAX_RPM)
+    prev_triangle = False             # edge-detect so holding doesn't ramp
+    prev_cross = False
+
     print("PS2 X-Drive Test — Ctrl+C to stop")
     print(f"Max RPM: ±{MAX_RPM}")
     print("Left stick: move  |  Right stick X: rotate")
-    print(f"D-pad: fine-adjust ±{MICRO_RPM} RPM (up/down=fwd/back, left/right=strafe)")
+    print(f"D-pad: fine-adjust ({micro_duty}% = {int(MAX_RPM * micro_duty / 100)} RPM)  |  △/✕: ±5% duty")
     print(f"Heartbeat: 0x300 every {int(HEARTBEAT_INTERVAL*1000)}ms")
 
     try:
@@ -89,11 +93,21 @@ def main():
             vy    =  -map_axis(data['lx'])    # left/right strafe
             omega =  map_axis(data['rx'])    # rotation
 
+            # ── Triangle / Cross: adjust D-pad fine-tune duty cycle ──
+            tri = ps2.is_pressed(data['btn2'], BTN_TRIANGLE)
+            crs = ps2.is_pressed(data['btn2'], BTN_CROSS)
+            if tri and not prev_triangle:
+                micro_duty = min(micro_duty + 5, 100)
+            if crs and not prev_cross:
+                micro_duty = max(micro_duty - 5, 10)
+            prev_triangle = tri
+            prev_cross = crs
+
             # D-pad fine adjustment: adds a small fixed-RPM crawl on top of the
             # sticks so you can nudge the robot onto a mark. With the sticks
             # centered it gives pure slow motion. Same body-frame convention as
             # the sticks (+vx fwd, +vy left); held = continuous, tapped = pulse.
-            micro = MICRO_RPM / MAX_RPM
+            micro = (micro_duty / 100.0)
             if ps2.is_pressed(data['btn1'], BTN_UP):
                 vx += micro
             if ps2.is_pressed(data['btn1'], BTN_DOWN):
@@ -134,7 +148,8 @@ def main():
 
             print(
                 f"vx:{vx:+.2f} vy:{vy:+.2f} ω:{omega:+.2f}  "
-                f"M0:{rpm0:+4d} M1:{rpm1:+4d} M2:{rpm2:+4d} M3:{rpm3:+4d}",
+                f"M0:{rpm0:+4d} M1:{rpm1:+4d} M2:{rpm2:+4d} M3:{rpm3:+4d}  "
+                f"[D-pad:{micro_duty:3d}%]",
                 end='\r'
             )
 
