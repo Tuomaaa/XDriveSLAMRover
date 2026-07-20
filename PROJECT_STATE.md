@@ -1,7 +1,7 @@
 # SummerSLAM — Project State
 
-> 最后更新：2026-07-06
-> 当前阶段：Week 3 → Week 4 过渡 — odometry.py 已标定（ENCODER_SIGN 全 -1，ENCODER_CPR 2779），`can_bridge_node.py` 已接入 `OdometryEstimator` 并发布 odom+TF。发现 STM32 侧 PID runaway（encoder 反向→正反馈），已改为 open-loop（`USE_PID=0`，PID 保留待用），并修复 heartbeat 急停失效。已修 RL/RR encoder 接反（`MOTOR_MAP` index2/3 对调）。**下一步：实机方向复验（原地转只 theta 变 / 横移只 y 变 / 前进只 x 变）→ Ground truth 正方形 + 原地转 360° 卷尺对比 → Week4 drift**
+> 最后更新：2026-07-20
+> 当前阶段：Week 5 完成 → Week 6。HC-SR04 双超声波全链路跑通（STM32 TIM9 input-capture → CAN 0x202 → RPi sensor_msgs/Range），bench calibration 拟合噪声模型 sigma(d)=0.0017+0.0078d，BeamModel (Prob Robotics Ch.6) + RectMap ray casting 端到端验证通过（4 位置 × 2 传感器，expected vs observed 误差 <1.3mm，log-likelihood true>wrong 全 PASS）。**下一步：Week 6 MCL 粒子滤波定位**
 
 ---
 
@@ -116,6 +116,10 @@ Payload 格式：
 - [x] Heartbeat timeout 安全停机 (200ms 内无 0x300 心跳则电机 PWM 清零)
   - **急停失效 bug 修复 (2026-07-04)**：原来 `motors_stop()` 清零后紧随的控制块每 20ms 又把 PWM 顶回去，急停形同虚设。改成用 `hb_ok` 门控整个控制更新（open-loop 与 PID 两种模式都生效），超时时电机保持 0；PID 模式下还清 integral 防 windup。**待重新烧录验证**
 - [x] TIM3/TIM4 16-bit encoder overflow 处理 (软件扩展到 int32，与 CAN 协议累计 tick 对齐)
+- [x] HC-SR04 双超声波驱动 (hc_sr04.c/h, TIM9 CH1/CH2 input capture, 顺序测距)
+  - PA4=TRIG (共享), PA2=Right ECHO (TIM9_CH1), PA3=Back ECHO (TIM9_CH2)
+  - **注意**：PA2/PA3 原为 USART2 debug，已让给 TIM9，debug 串口不再可用
+  - CAN 0x202 发送 right_mm + back_mm + status (5 bytes)，集成在 20ms 控制循环
 
 ### ROS2 CAN Node（进行中）
 - [x] CAN 协议 encode/decode 层 (protocol.py)
@@ -145,6 +149,25 @@ Payload 格式：
 - [x] **发现并修复 RL/RR encoder 接反（2026-07-06）**：实机方向验证时 vy 和 omega 通道互换（原地转读成 y、横移读成 omega），vx 正常。用 `encoder_monitor.py` 逐个手转物理轮确认是 RL/RR 两路 encoder 物理接反（index 2 在 RR 轮、index 3 在 RL 轮）。修法：`odometry.py` 的 `MOTOR_MAP` 把 index 2↔3 标签对调（`{0:fl,1:fr,2:rr,3:rl}`），只改 odometry 不用重烧。smoke test 顺手重写成按 `ENCODER_SIGN`/`MOTOR_MAP` 反推构造输入（不再硬编码 per-index tick），改配置不会再悄悄失效
 - [ ] Ground truth sanity check：正方形轨迹 + 原地转 360°，卷尺量实际终点位置对比代码输出（**待实机**，用 `can_bridge_node.py` 的 pose 日志观察）。先做方向复验：原地转只 theta 变、横移只 y 变、前进只 x 变
 - [x] `can_bridge_node.py` 接入 `OdometryEstimator`（2026-07-04）：收齐 0x200+0x201 后调 `update()`（dt 用 CAN 帧时间戳），发布 `nav_msgs/Odometry` on `odom` + `odom→base_link` TF；另加 ~2Hz 节流 pose 日志供 ground-truth 观察。import 改成平铺式（跟全项目一致），`python3 can_bridge_node.py` 直接跑。**代码完成，待实机验证**
+
+### Week5 Ultrasonic Perception（完成 ✅ 2026-07-20）
+
+- [x] HC-SR04 STM32 驱动 (hc_sr04.c/h): TIM9 input-capture, right+back 顺序测距, 共享 TRIG
+- [x] CAN 0x202 协议 (protocol.py): encode/decode right_mm + back_mm + status
+- [x] can_bridge_node.py 接收 0x202, 发布 `/ultrasonic/right` + `/ultrasonic/back` (sensor_msgs/Range)
+- [x] Bench calibration（2026-07-20）: 2 sensors × 4 distances (100/300/600/1000mm) × 100 samples on KT board
+  - 噪声模型拟合: `sigma(d) = 0.0017 + 0.0078 * d` (meters)
+  - Bias: ~2.4mm + 0.47% of distance (small positive, not corrected)
+  - Invalid rate: ~2.9% overall
+  - 数据: `data/ultrasonic/bench_calibration.csv`, `data/ultrasonic/bench_summary.csv`
+- [x] BeamModel (Prob Robotics Ch.6 四分量 beam model): w_hit=0.94, w_short=0.01, w_max=0.03, w_rand=0.02
+- [x] GaussianModel (简化版, 两分量)
+- [x] RectMap + 2D ray casting (map_model.py), 支持 sensor offset
+- [x] 端到端 map validation（2026-07-20）: 116.5cm KT board 正方形, 4 位置 × 2 传感器
+  - Expected vs observed: 全部 8 路误差 <1.3mm
+  - Log-likelihood: true pose 得分 > wrong pose (±50mm shift), 全 4 位置 PASS
+  - 数据: `data/ultrasonic/map_validation.csv`
+- [x] Sensor offset 实测: RIGHT=(-π/2, (0.0, -0.09)m), BACK=(π, (-0.09, 0.0)m)
 
 ---
 
@@ -192,6 +215,11 @@ Payload 格式：
 | 2026-07-06 | forward kinematics 的 `vy`/`omega` 输出翻号，对齐 REP-103 | RL/RR map 修好后方向复验：横移左读成 -vy、CCW 读成 -omega，而 vx（前进）正常。「vx 对、vy+omega 同时反」= 左右镜像，说明 drive 侧逆解约定里 +vy 指向右、+omega 是 CW。`ENCODER_SIGN` 被前进测试钉死、`MOTOR_MAP` 被物理接线钉死，这个 frame 镜像只能在输出端修：`odometry.py` 里 `vy`/`omega` 前加负号，vx 不动（本就 REP-103 正确）。改的是**输出坐标约定**，不是 drive 侧命令约定（遥控手感是另一码事，见"不在本次范围"）|
 | 2026-07-06 | `odometry.py` 平移补 `√2`（`TRANSLATION_SCALE`），旋转不动 | Task4 海绵 ground-truth（`data/Week4 Trials.xlsx`）：前进+横移 odom 都读实测的 ~0.74，而原地转读 ~1.0。这个"平移偏低、旋转正常"= X-drive 45° 轮的 `cos45=1/√2=0.707` 投影因子在**未归一化逆解**里缺失（drive 侧 `PS2_Drive_Test.py` 与本文件都用系数=1）；旋转项用 `ωR` 不带投影故不受影响。geometry 保证 + 实测 0.74 双重支持。修法：`vx,vy` 各乘 √2，omega 不动。**drive 侧逆解暂不改**（只影响遥控速度标定，不影响方向；cmd_vel 阶段再统一）。剩余 0.74→0.707 的 ~5% 是海绵打滑/CPR 小残差，待硬地或大海绵长距复测再抠 |
 | 2026-07-06 | `PS2_Drive_Test.py` 加 D-pad 微调（`MICRO_RPM=50`） | 遥控摇杆太粗，ground-truth 时对不准地面标记。方向键 上/下=前后、左/右=横移，叠加一个固定小 RPM crawl 在摇杆之上（摇杆归中时即纯慢速微调）。body-frame 约定与摇杆一致（+vx 前、+vy 左）。用 `PS2.is_pressed(btn1, BTN_*)` 读，active-low |
+| 2026-07-20 | PA2/PA3 从 USART2 改给 TIM9 (HC-SR04 echo) | STM32 GPIO 全部用完，超声波 echo 需要 input-capture timer，PA2/PA3 是 TIM9 唯一可用 pin。USART2 debug 串口牺牲，改用 CAN 帧观察调试 |
+| 2026-07-20 | 两个 HC-SR04 共享一根 TRIG 线 + 软件顺序测距 | GPIO 不够分两根 TRIG。hc_sr04.c 用状态机保证先测 right 再测 back，间隔 60ms 避免 crosstalk。实测 invalid 率 ~3%，没有观察到双峰 |
+| 2026-07-20 | 噪声模型用两传感器合并拟合而非分别建模 | 两传感器 std 趋势几乎一致（per-sensor fit 差异 <0.5mm），分别建模增加参数但不增加 MCL 区分度。合并后 sigma(d) = 0.0017 + 0.0078*d |
+| 2026-07-20 | BeamModel 权重 w_hit=0.94/w_short=0.01/w_max=0.03/w_rand=0.02 | 实测数据非常干净：无 crosstalk、无 multipath 短读数，invalid 率 ~3% 直接映射到 w_max。w_short 保留极小值兜底 |
+| 2026-07-20 | Bias (~2.4mm + 0.47% of distance) 不补偿 | bias 绝对值 <8mm@1m，远小于 MCL 粒子间距（通常几十mm），补偿收益不抵引入的复杂度。如果将来 MCL 精度不够再回来加 |
 
 ---
 
@@ -235,17 +263,161 @@ Payload 格式：
 
 ---
 
+## Engineering Notebook（本 session 记录）
+
+### Session 目标
+
+推进 Week3→Week4 的 ground-truth / drift 前置工作：把 odometry 的方向、尺度、测试流程和现场操作问题（摇杆太粗、地面 slip、硬件偏航）理顺，做到能在实机上稳定收数据。
+
+### 现场观测 / 现象
+
+1. **方向问题（第一轮）**
+   - 原地转被读成 y 变化、横移被读成 omega，前进 x 正常。
+   - `encoder_monitor.py` 手转物理轮确认：**RL / RR 两路 encoder 物理接反**。
+
+2. **方向问题（第二轮）**
+   - 修完 RL/RR map 后，横移左读成 `-vy`，CCW 读成 `-omega`，但前进 `+x` 正常。
+   - 结论：不是 sign，也不是 map，而是**输出坐标约定左右镜像**；drive 侧逆解约定里 `+vy` 实际指向右、`+omega` 指向 CW。
+
+3. **尺度问题（foam ground-truth）**
+   - `data/Week4 Trials.xlsx`:
+     - 前进 / 横移：odom 约为实测的 **0.74×**
+     - 原地转：odom 约为实测的 **~1.0×**（但 actual 是 eye test，只能粗看量级）
+   - 结论：这是 **X-drive 45° 轮缺 `cos45 = 1/√2` 投影因子** 的经典指纹。平移少了 `1/√2`，旋转不受影响。
+
+4. **硬件偏航**
+   - Test1 前进时 `theta` 稳定落在 `-7° ~ -11°`，肉眼也看到明显转向。
+   - 结论：这是 **open-loop + 单电机阻力不均** 的物理偏航，odometry 在忠实记录，不是 odom bug。短期内不修，把它当作 Week4 uncertainty 的一部分。
+
+5. **地面选择**
+   - 用户实测：**光滑硬地板误差很离谱，可以 ignore**。
+   - 进一步澄清：这里不是“硬地一定更准”，而是**这台 X-drive 在光滑地面对 driven 分量抓地差，translation slip 太大**；反而海绵更咬地。
+   - 原本海绵的唯一短板是面积太小（0.6m×0.6m，距离短、量测噪声大）；后来用户确认已有 **约 1m×1m 海绵**，这个短板被补掉。
+
+6. **测试操作问题**
+   - 用户指出：PS2 摇杆做不了微调，对准地面标记很困难。
+   - 结论：需要给遥控加一个**低速 crawl / nudge 模式**，专门给 ground-truth 对位。
+
+### 本 session 的代码改动
+
+#### 1) `ros2_ws/src/odometry.py`
+
+- **修 RL/RR encoder swap**
+  - `MOTOR_MAP` 从 drive 顺序改成 encoder 物理顺序：
+    - `0: fl`
+    - `1: fr`
+    - `2: rr`
+    - `3: rl`
+  - 注释明确写出：encoder 接线与 motor 接线是两套独立线束，后两位与 `main.c` enum 不一致是**故意的**。
+
+- **修 REP-103 方向**
+  - forward kinematics 输出端把 `vy` / `omega` 翻号：
+    - 左 = `+y`
+    - CCW = `+omega`
+  - `vx` 保持不变（本来就对）。
+
+- **补平移 `√2` 尺度**
+  - 新增 `TRANSLATION_SCALE = math.sqrt(2)`。
+  - `vx`、`vy` 各乘 `TRANSLATION_SCALE`；`omega` 不动。
+  - 注释记录依据：foam ground-truth 平移 ~0.74×、旋转 ~1.0×，与缺失 `cos45` 完全一致。
+
+- **smoke test 重写并保持稳健**
+  - 不再硬编码 per-index ticks，而是通过 `MOTOR_MAP` + `ENCODER_SIGN` 反推 raw ticks。
+  - 这样以后再改 map/sign，test 不会悄悄失效。
+
+#### 2) `ros2_ws/src/PS2_Drive_Test.py`
+
+- **加 heartbeat 线程**（本 session 之前已完成，但本 session 继续沿用验证）
+- **加 D-pad 微调模式**
+  - `MICRO_RPM = 50`
+  - D-pad:
+    - 上 / 下 = 前进 / 后退
+    - 左 / 右 = 左移 / 右移
+  - 逻辑上是给 `vx` / `vy` 叠一个固定小 crawl；摇杆归中时就变成纯微调。
+  - 目的：让用户在 ground-truth 时可以把车**慢慢蹭到地面标记上**。
+
+### 本 session 的验证
+
+- `python odometry.py` smoke test 通过：
+  - `vx = 0`
+  - `omega = 0`
+  - `vy > 0`
+- `python -m py_compile PS2_Drive_Test.py` 通过。
+- 代码已 commit & push：
+  - `2b015ab` — `odometry: fix swapped RL/RR encoders in MOTOR_MAP`
+  - `16bfac0` — `odometry: flip vy/omega sign to REP-103 (left=+y, CCW=+omega)`
+  - `c7492f3` — `odometry: bake in sqrt2 translation scale; PS2: add D-pad fine-adjust`
+
+### 本 session 的测试方法 / 实验设计决策
+
+1. **平移尺度怎么量**
+   - 不要求车走直线；允许它因为硬件问题拐弯。
+   - 真正拿来比的是：
+     - 卷尺量的 **起点→终点净位移直线距离**
+     - odom 的 `sqrt(x^2 + y^2)`
+   - 因为偏航不破坏这个比值，所以即便路径是弧线，平移 scale 仍然可测。
+
+2. **旋转数据怎么用**
+   - 用户补充：所有 omega actual 基本都是 **eye test 的大致 180/360**，本身误差不小。
+   - 因此：旋转数据只拿来证明“量级对、旋转不需要 √2”，**不拿来抠 `CENTER_TO_WHEEL_M` 的精度**。
+
+3. **地面怎么选**
+   - 放弃光滑硬地。
+   - 使用 **1m×1m 海绵** 做长距离复测，既保留低 slip，又把距离拉长到 ~0.6–0.7m，降低量测噪声。
+
+4. **速度怎么选**
+   - 不推满，不慢挪。
+   - 原则是：**中等稳速、每 trial 尽量一致**。
+   - 理由：
+     - 太快 → 猛起步/急停导致 slip
+     - 太慢 → 落入死区，弱电机可能根本不转
+
+5. **样本量建议**
+   - 前进：10 次（既测 scale，也估偏航 std）
+   - 横移：5–6 次（验证 y 轴 scale 是否一致）
+   - 原地转：5 次（只看量级）
+   - 正方形：可选，主要看硬件导致的累积偏航，不作为尺度依据
+
+6. **正方形怎么解释**
+   - 在这台车上，正方形“闭不闭合”主要反映硬件偏航，不是 odometry 本身。
+   - 真正该比的是：**odom 报的终点姿态 vs 实际终点姿态是否一致**。
+   - 所以正方形只是附加实验，不是主尺度实验。
+
+### 当前结论（截至本 session 结束）
+
+- odometry 的三件核心事都已理顺：
+  1. **map**（RL/RR encoder swap）
+  2. **sign / frame convention**（REP-103）
+  3. **translation scale**（√2）
+- `can_bridge_node.py` 可继续直接用于 ground-truth 读数。
+- 目前最大的非理想项不是 odometry 数学，而是：
+  - **open-loop 单电机不均导致的偏航**
+  - **实际测试地面的抓地特性**
+  - **旋转 actual 量测本身比较粗**
+
+### 下一步（从这个 session 接下去）
+
+1. Pi `git pull`，带上：
+   - `odometry.py` 的 RL/RR + REP-103 + √2
+   - `PS2_Drive_Test.py` 的 D-pad 微调
+2. 在 **1m×1m 海绵** 上做新一轮 Task 4：
+   - 前进 ~0.6–0.7m × 10
+   - 左移 ~0.6m × 5–6
+   - 原地转（粗测量级）× 5
+3. 把新数据回填到 `data/Week4 Trials.xlsx` 或新表
+4. 用新数据：
+   - 验证 √2 修正后平移是否接近 1.0× 实测
+   - 量化偏航的 mean / std，作为 Week4 motion uncertainty 输入
+5. 若需要，再用 `encoder_monitor.py` 做“弱轮定位”（看纯前进时哪列 tick 增速偏少）
+
+---
+
 ## 下一步
 
-1. **Encoder 方向验证**：单独驱动纯 vy、纯 ω，确认四路 encoder 符号与 forward kinematics 假设一致，据此填 `odometry.py` 的 `ENCODER_SIGN`
-2. **`ENCODER_CPR` 实测标定**：手动转固定圈数（如 10 圈），比对 CNT 差值，更新 `odometry.py` 里的 `ENCODER_CPR`
-3. **Ground truth sanity check**：跑正方形轨迹 + 原地转 360°，卷尺量实际终点位置，对比 `odometry.py` 输出的 (x, y, θ)
-4. **`can_bridge_node.py` 集成 `OdometryEstimator`**：接收 0x200/0x201 → 调用 update() → 发布 nav_msgs/Odometry + TF
-5. **PS2 驱动验证**：接线 + 测试 analog mode 读取
-6. **PS2 → cmd_vel**：摇杆数据映射到 ROS2 速度指令 topic
-7. **RPi → STM32 方向验证**：cansend 发帧，STM32 收并用 GPIO 指示
-8. **RPi 网络修复**：WiFi DHCP 不分配 IPv4 地址，需排查（不影响 CAN 和 GPIO 开发）
-9. **Week4**：完成 1~3 项验证后，进入重复轨迹统计，测量真实 odometry drift 并与 motion uncertainty 模型对照
+1. **Week 6 — MCL 粒子滤波定位**：用 encoder odometry 做 motion update，用超声波 BeamModel 做 measurement update，在 KT 板矩形地图内可视化粒子收敛
+2. **Ground truth sanity check**：在 1m×1m 海绵上做长距复测（前进 / 横移 / 粗旋转），更新 Week4 数据表（仍待做）
+3. **弱轮定位**：用 `encoder_monitor.py` 看纯前进时哪一路 tick 增速明显偏少，确认偏航根因
+4. **RPi 网络修复**：WiFi DHCP 不分配 IPv4 地址，需排查（不影响 CAN 和 GPIO 开发）
 
 ---
 
