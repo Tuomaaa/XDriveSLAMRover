@@ -8,6 +8,7 @@ Responsibilities:
   - Read encoder frames (0x200/0x201), feed OdometryEstimator, and publish
     nav_msgs/Odometry on 'odom' plus the odom->base_link TF.
   - Republish raw encoder ticks on 'encoder_raw' for debugging.
+  - Publish ultrasonic frame 0x202 as two sensor_msgs/Range topics.
 
 Run (flat scripts, no colcon package):
     source /opt/ros/jazzy/setup.bash
@@ -21,9 +22,11 @@ import math
 
 import rclpy
 from rclpy.node import Node
+from rclpy.time import Time
 from std_msgs.msg import Int16MultiArray, Int32MultiArray
 from nav_msgs.msg import Odometry
 from geometry_msgs.msg import TransformStamped
+from sensor_msgs.msg import Range
 from tf2_ros import TransformBroadcaster
 
 from protocol import (
@@ -71,7 +74,12 @@ class CanBridgeNode(Node):
         self._encoder_pub = self.create_publisher(
             Int32MultiArray, 'encoder_raw', 10)
         self._odom_pub = self.create_publisher(Odometry, 'odom', 10)
+        self._ultrasonic_right_pub = self.create_publisher(
+            Range, '/ultrasonic/right', 10)
+        self._ultrasonic_back_pub = self.create_publisher(
+            Range, '/ultrasonic/back', 10)
         self._tf_broadcaster = TransformBroadcaster(self)
+        self._ultrasonic_update_count = 0
 
         # ── Subscribers ──
         self._rpm_sub = self.create_subscription(
@@ -135,9 +143,41 @@ class CanBridgeNode(Node):
             self.get_logger().debug(
                 f'ACK for cmd 0x{result.cmd_id:02X}: {result.data.hex()}')
 
+        elif isinstance(result, dict) and 'right_mm' in result:
+            self._on_ultrasonic(result, msg.timestamp)
+
         elif result is None:
             self.get_logger().warn(
                 f'Unknown CAN ID: 0x{msg.arbitration_id:03X}')
+
+    def _on_ultrasonic(self, reading, timestamp):
+        stamp = Time(nanoseconds=int(timestamp * 1e9)).to_msg()
+        self._publish_range(
+            self._ultrasonic_right_pub, stamp, 'ultrasonic_right',
+            reading['right_mm'], reading['right_valid'])
+        self._publish_range(
+            self._ultrasonic_back_pub, stamp, 'ultrasonic_back',
+            reading['back_mm'], reading['back_valid'])
+
+        self._ultrasonic_update_count += 1
+        if self._ultrasonic_update_count % 4 == 0:  # about 2 Hz at 8 Hz
+            right = (f"{reading['right_mm']}mm" if reading['right_valid']
+                     else 'invalid')
+            back = (f"{reading['back_mm']}mm" if reading['back_valid']
+                    else 'invalid')
+            self.get_logger().info(f'ultrasonic  right={right} back={back}')
+
+    @staticmethod
+    def _publish_range(publisher, stamp, frame_id, distance_mm, valid):
+        msg = Range()
+        msg.header.stamp = stamp
+        msg.header.frame_id = frame_id
+        msg.radiation_type = Range.ULTRASOUND
+        msg.field_of_view = 0.26
+        msg.min_range = 0.02
+        msg.max_range = 4.0
+        msg.range = distance_mm / 1000.0 if valid else float('inf')
+        publisher.publish(msg)
 
     def _on_encoder_complete(self, timestamp: float):
         result = self._odo.update(dict(self._ticks), timestamp)

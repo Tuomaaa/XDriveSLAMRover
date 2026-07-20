@@ -1,4 +1,10 @@
+"""SummerSLAM CAN protocol.
 
+Sensor feedback IDs:
+  0x200: cumulative encoder ticks for motors 0/1
+  0x201: cumulative encoder ticks for motors 2/3
+  0x202: right/back ultrasonic distances and validity bits
+"""
 from enum import IntEnum
 import struct
 from dataclasses import dataclass
@@ -10,6 +16,7 @@ class MsgId(IntEnum):
     VEL_CMD   = 0x100
     ENCODER_0 = 0x200   # Motor 0 + Motor 1
     ENCODER_1 = 0x201   # Motor 2 + Motor 3
+    ULTRASONIC = 0x202  # right_mm + back_mm + validity status
     HEARTBEAT = 0x300
     PID_KP    = 0x400
     PID_KI    = 0x401
@@ -56,6 +63,10 @@ def encode_heartbeat() -> bytes:
 def encode_pid(motor: int, value: float) -> bytes:
     return struct.pack('<Bf', motor, value)
 
+def encode_ultrasonic(right_mm: int, back_mm: int, status: int) -> bytes:
+    """Encode the STM32->RPi 0x202 payload (primarily for tests)."""
+    return struct.pack('<HHB', right_mm, back_mm, status)
+
 
 
 def decode(arbitration_id: int, data: bytes):
@@ -67,6 +78,15 @@ def decode(arbitration_id: int, data: bytes):
     if arbitration_id == MsgId.ENCODER_1:
         motor_a, motor_b = struct.unpack('<2i', data)
         return EncoderMsg(motor_id=1, motor_a_ticks=motor_a, motor_b_ticks=motor_b)
+
+    if arbitration_id == MsgId.ULTRASONIC:
+        right_mm, back_mm, status = struct.unpack('<HHB', data)
+        return {
+            "right_mm": right_mm,
+            "back_mm": back_mm,
+            "right_valid": bool(status & 0x01),
+            "back_valid": bool(status & 0x02),
+        }
 
     # Category messages
     category = msg_category(arbitration_id)
@@ -80,4 +100,15 @@ def decode(arbitration_id: int, data: bytes):
         remaining = data[1:] if len(data) > 1 else b''
         return AckMsg(cmd_id=cmd_id, data=remaining)
 
-    return None  
+    return None
+
+if __name__ == '__main__':
+    payload = encode_ultrasonic(203, 0xFFFF, 0x01)
+    assert len(payload) == 5
+    assert decode(MsgId.ULTRASONIC, payload) == {
+        "right_mm": 203,
+        "back_mm": 0xFFFF,
+        "right_valid": True,
+        "back_valid": False,
+    }
+    print('protocol smoke tests passed')

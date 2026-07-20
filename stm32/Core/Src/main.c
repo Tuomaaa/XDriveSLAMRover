@@ -23,6 +23,7 @@
 /* USER CODE BEGIN Includes */
 #include "mcp2515.h"
 #include "can.h"
+#include "hc_sr04.h"
 #include <string.h>
 /* USER CODE END Includes */
 
@@ -96,6 +97,7 @@ typedef enum {
 #define CAN_ID_VEL_CMD   0x100   // payload: int16 target RPM x4, order = [MOTOR_FL, MOTOR_FR, MOTOR_RL, MOTOR_RR]
 #define CAN_ID_ENCODER_0 0x200   // payload: int32 cum_ticks x2 = [MOTOR_FL, MOTOR_FR]
 #define CAN_ID_ENCODER_1 0x201   // payload: int32 cum_ticks x2 = [MOTOR_RL, MOTOR_RR]
+#define CAN_ID_ULTRASONIC 0x202  // payload: right_mm, back_mm, validity status
 #define CAN_ID_HEARTBEAT 0x300
 /* USER CODE END PD */
 
@@ -112,8 +114,7 @@ TIM_HandleTypeDef htim2;
 TIM_HandleTypeDef htim3;
 TIM_HandleTypeDef htim4;
 TIM_HandleTypeDef htim5;
-
-UART_HandleTypeDef huart2;
+TIM_HandleTypeDef htim9;
 
 /* USER CODE BEGIN PV */
 Motor_t motors[NUM_MOTORS];
@@ -142,7 +143,7 @@ static void MX_TIM2_Init(void);
 static void MX_TIM3_Init(void);
 static void MX_TIM4_Init(void);
 static void MX_TIM5_Init(void);
-static void MX_USART2_UART_Init(void);
+static void MX_TIM9_Init(void);
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
@@ -242,7 +243,7 @@ int main(void)
   MX_TIM3_Init();
   MX_TIM4_Init();
   MX_TIM5_Init();
-  MX_USART2_UART_Init();
+  MX_TIM9_Init();
   /* USER CODE BEGIN 2 */
 
   // ── Motor config table ──
@@ -270,6 +271,9 @@ int main(void)
   err = MCP_reset();
   if (err == ERROR_OK) err = MCP_setBitrateClock(CAN_500KBPS, MCP_8MHZ);
   if (err == ERROR_OK) err = MCP_setNormalMode();
+
+  // TIM9 input capture and the shared ultrasonic trigger output.
+  HC_SR04_Init();
 
   last_heartbeat = HAL_GetTick();
   last_pid_time = HAL_GetTick();
@@ -373,6 +377,23 @@ int main(void)
       memcpy(&tx1.data[0], &motors[MOTOR_RL].cum_ticks, 4);
       memcpy(&tx1.data[4], &motors[MOTOR_RR].cum_ticks, 4);
       MCP_sendMessage(&tx1);
+
+      // Service one sequential right/back ultrasonic cycle. StartMeasurement
+      // is a no-op while a cycle is active, so this remains non-blocking apart
+      // from the 12 us trigger pulse.
+      if (HC_SR04_IsComplete()) {
+        HC_SR04_Result ultrasonic = HC_SR04_GetResult();
+        can_frame tx_ultrasonic;
+        tx_ultrasonic.can_id = CAN_ID_ULTRASONIC;
+        tx_ultrasonic.can_dlc = 5;
+        tx_ultrasonic.data[0] = (uint8_t)(ultrasonic.right_mm & 0xFFU);
+        tx_ultrasonic.data[1] = (uint8_t)(ultrasonic.right_mm >> 8);
+        tx_ultrasonic.data[2] = (uint8_t)(ultrasonic.back_mm & 0xFFU);
+        tx_ultrasonic.data[3] = (uint8_t)(ultrasonic.back_mm >> 8);
+        tx_ultrasonic.data[4] = ultrasonic.status;
+        MCP_sendMessage(&tx_ultrasonic);
+      }
+      HC_SR04_StartMeasurement();
     }
 
     HAL_Delay(1);
@@ -750,35 +771,47 @@ static void MX_TIM5_Init(void)
 }
 
 /**
-  * @brief USART2 Initialization Function
+  * @brief TIM9 Initialization Function
   * @param None
   * @retval None
   */
-static void MX_USART2_UART_Init(void)
+static void MX_TIM9_Init(void)
 {
 
-  /* USER CODE BEGIN USART2_Init 0 */
+  /* USER CODE BEGIN TIM9_Init 0 */
 
-  /* USER CODE END USART2_Init 0 */
+  /* USER CODE END TIM9_Init 0 */
 
-  /* USER CODE BEGIN USART2_Init 1 */
+  TIM_IC_InitTypeDef sConfigIC = {0};
 
-  /* USER CODE END USART2_Init 1 */
-  huart2.Instance = USART2;
-  huart2.Init.BaudRate = 115200;
-  huart2.Init.WordLength = UART_WORDLENGTH_8B;
-  huart2.Init.StopBits = UART_STOPBITS_1;
-  huart2.Init.Parity = UART_PARITY_NONE;
-  huart2.Init.Mode = UART_MODE_TX_RX;
-  huart2.Init.HwFlowCtl = UART_HWCONTROL_NONE;
-  huart2.Init.OverSampling = UART_OVERSAMPLING_16;
-  if (HAL_UART_Init(&huart2) != HAL_OK)
+  /* USER CODE BEGIN TIM9_Init 1 */
+
+  /* USER CODE END TIM9_Init 1 */
+  htim9.Instance = TIM9;
+  htim9.Init.Prescaler = 99;
+  htim9.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim9.Init.Period = 65535;
+  htim9.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim9.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  if (HAL_TIM_IC_Init(&htim9) != HAL_OK)
   {
     Error_Handler();
   }
-  /* USER CODE BEGIN USART2_Init 2 */
+  sConfigIC.ICPolarity = TIM_INPUTCHANNELPOLARITY_RISING;
+  sConfigIC.ICSelection = TIM_ICSELECTION_DIRECTTI;
+  sConfigIC.ICPrescaler = TIM_ICPSC_DIV1;
+  sConfigIC.ICFilter = 0;
+  if (HAL_TIM_IC_ConfigChannel(&htim9, &sConfigIC, TIM_CHANNEL_1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  if (HAL_TIM_IC_ConfigChannel(&htim9, &sConfigIC, TIM_CHANNEL_2) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN TIM9_Init 2 */
 
-  /* USER CODE END USART2_Init 2 */
+  /* USER CODE END TIM9_Init 2 */
 
 }
 
@@ -800,9 +833,19 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_GPIOB_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(TRIG_GPIO_Port, TRIG_Pin, GPIO_PIN_RESET);
+
+  /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(GPIOB, Motor1_1_Pin|Motor1_2_Pin|Motor2_1_Pin|Motor2_2_Pin
                           |Motor3_1_Pin|Motor3_2_Pin|Motor4_1_Pin|Motor4_2_Pin
                           |CS_Pin, GPIO_PIN_RESET);
+
+  /*Configure GPIO pin : TRIG_Pin */
+  GPIO_InitStruct.Pin = TRIG_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(TRIG_GPIO_Port, &GPIO_InitStruct);
 
   /*Configure GPIO pins : Motor1_1_Pin Motor1_2_Pin Motor2_1_Pin Motor2_2_Pin
                            Motor3_1_Pin Motor3_2_Pin Motor4_1_Pin Motor4_2_Pin
