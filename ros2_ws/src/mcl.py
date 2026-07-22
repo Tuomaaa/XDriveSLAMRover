@@ -134,6 +134,64 @@ class MCL:
         self.particles[:, 2] = _wrap_angle(heading + noisy_dtheta)
         self._clamp_to_map()
 
+    def update(self, measurements):
+        """Reweight particles against range readings, then resample.
+
+        measurements aligns with sensor_configs; use None for a sensor that
+        returned no valid echo this cycle. An all-None cycle is a no-op --
+        with nothing observed there is nothing to correct, and resampling
+        on uniform weights would only throw away diversity.
+        """
+        if len(measurements) != len(self.sensor_configs):
+            raise ValueError('measurements must align with sensor_configs')
+        if all(value is None for value in measurements):
+            return
+
+        log_weights = np.empty(self.num_particles)
+        for index in range(self.num_particles):
+            pose = (float(self.particles[index, 0]),
+                    float(self.particles[index, 1]),
+                    float(self.particles[index, 2]))
+            log_weights[index] = self.beam_model.total_log_likelihood(
+                measurements, pose, self.rect_map, self.sensor_configs)
+
+        finite = np.isfinite(log_weights)
+        if not np.any(finite):
+            # Every particle is impossible. Keep the cloud and the uniform
+            # weights rather than dividing by zero; the next measurement
+            # gets another chance to discriminate.
+            self.weights = np.full(
+                self.num_particles, 1.0 / self.num_particles)
+            return
+
+        # Subtract the max before exponentiating: the log-likelihoods run
+        # to a few hundred negative, and exp() of those underflows to a
+        # column of zeros.
+        shifted = log_weights - np.max(log_weights[finite])
+        weights = np.exp(shifted)
+        self.weights = weights / float(np.sum(weights))
+        self._low_variance_resample()
+
+    def _low_variance_resample(self):
+        """Probabilistic Robotics Table 4.4: one random offset, then N
+        evenly spaced draws through the cumulative weights.
+
+        Cheaper and lower-variance than N independent draws -- a particle
+        of weight w is guaranteed floor(w*N) or ceil(w*N) copies instead of
+        a binomial spread around that.
+        """
+        count = self.num_particles
+        positions = (self._rng.uniform(0.0, 1.0 / count)
+                     + np.arange(count) / count)
+
+        cumulative = np.cumsum(self.weights)
+        cumulative[-1] = 1.0   # float error can leave the sum just under 1
+        indexes = np.searchsorted(cumulative, positions)
+        np.clip(indexes, 0, count - 1, out=indexes)
+
+        self.particles = self.particles[indexes]
+        self.weights = np.full(count, 1.0 / count)
+
     def estimate(self):
         """Weighted mean pose; theta uses a circular mean so that headings
         either side of +/-pi do not average to zero."""
@@ -262,6 +320,66 @@ def _test_predict_uses_per_particle_heading_not_a_shared_one():
     assert backward_half < 0.42, backward_half
 
 
+def _test_update_concentrates_on_the_truth():
+    rect_map = default_map()
+    mcl = MCL(rect_map, default_beam_model(), SENSOR_CONFIGS,
+              num_particles=2000, rng_seed=4)
+    true_pose = (0.5825, 0.5825, 0.0)
+    mcl.initialize(*true_pose, xy_spread=0.05, theta_spread=0.02)
+
+    measurements = [rect_map.expected_range(true_pose, angle, offset)
+                    for angle, offset in SENSOR_CONFIGS]
+    spread_before = float(np.std(mcl.particles[:, 1]))
+
+    mcl.update(measurements)
+
+    spread_after = float(np.std(mcl.particles[:, 1]))
+    x, y, _ = mcl.estimate()
+    assert abs(x - true_pose[0]) < 0.02, x
+    assert abs(y - true_pose[1]) < 0.02, y
+    assert spread_after < spread_before, (spread_before, spread_after)
+    assert mcl.particles.shape == (2000, 3), mcl.particles.shape
+    assert math.isclose(float(np.sum(mcl.weights)), 1.0)
+
+
+def _test_update_tolerates_a_dead_sensor():
+    """A None entry is skipped, not treated as a zero-range reading."""
+    rect_map = default_map()
+    mcl = MCL(rect_map, default_beam_model(), SENSOR_CONFIGS,
+              num_particles=1000, rng_seed=5)
+    true_pose = (0.5825, 0.5825, 0.0)
+    mcl.initialize(*true_pose, xy_spread=0.05, theta_spread=0.02)
+
+    back_range = rect_map.expected_range(true_pose, *BACK_SENSOR)
+    mcl.update([None, back_range])
+
+    x, _, _ = mcl.estimate()
+    assert abs(x - true_pose[0]) < 0.02, x
+    assert math.isclose(float(np.sum(mcl.weights)), 1.0)
+
+    # All-None must be a no-op rather than a divide-by-zero.
+    before = mcl.particles.copy()
+    mcl.update([None, None])
+    assert np.array_equal(before, mcl.particles)
+
+
+def _test_resample_duplicates_by_weight():
+    """A single dominant particle must take over the whole population."""
+    mcl = MCL(default_map(), default_beam_model(), SENSOR_CONFIGS,
+              num_particles=100, rng_seed=6)
+    mcl.particles[:, 0] = np.arange(100) / 100.0
+    mcl.particles[:, 1] = 0.5
+    mcl.particles[:, 2] = 0.0
+    mcl.weights[:] = 0.0
+    mcl.weights[42] = 1.0
+
+    mcl._low_variance_resample()
+
+    assert np.allclose(mcl.particles[:, 0], 0.42), mcl.particles[:5, 0]
+    assert mcl.particles.shape == (100, 3)
+    assert math.isclose(float(np.sum(mcl.weights)), 1.0)
+
+
 def _run_tests():
     _test_defaults_match_calibration()
     _test_initialize_and_estimate()
@@ -269,6 +387,9 @@ def _run_tests():
     _test_predict_advances_and_spreads()
     _test_predict_respects_each_particle_heading()
     _test_predict_uses_per_particle_heading_not_a_shared_one()
+    _test_update_concentrates_on_the_truth()
+    _test_update_tolerates_a_dead_sensor()
+    _test_resample_duplicates_by_weight()
     print('mcl tests passed')
 
 
