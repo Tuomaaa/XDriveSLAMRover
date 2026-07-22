@@ -187,6 +187,8 @@ def parse_args():
         parser.error('--particles must be positive')
     if args.stride < 1:
         parser.error('--stride must be positive')
+    if args.fps < 1:
+        parser.error('--fps must be positive')
     return args
 
 
@@ -199,6 +201,11 @@ def main():
     mcl = MCL(rect_map, default_beam_model(), SENSOR_CONFIGS,
               num_particles=args.particles, rng_seed=args.seed)
     frames = replay(entries, mcl, start_pose)
+    if not frames:
+        raise SystemExit(
+            f'{args.log}: {len(entries)} row(s) is not enough to replay. '
+            'The first row only establishes the odometry origin, so at '
+            'least two are needed to form a delta.')
 
     final = frames[-1]
     x, y, theta = final['estimate']
@@ -240,6 +247,15 @@ def _run_tests():
     assert abs(mapped[0] - 0.3) < 1e-9, mapped
     assert abs(mapped[1] - 0.6) < 1e-9, mapped
     assert abs(mapped[2] - math.pi / 2) < 1e-9, mapped
+
+    # A one-row log yields no filter steps: the first row only establishes
+    # the odometry origin. main() turns this into a clear message rather
+    # than an IndexError on frames[-1].
+    single_row = [{'odom_x': 0.0, 'odom_y': 0.0, 'odom_theta': 0.0,
+                   'right_m': 0.5, 'back_m': 0.5, 'timestamp_s': 0.0}]
+    mcl = MCL(default_map(), default_beam_model(), SENSOR_CONFIGS,
+              num_particles=10, rng_seed=0)
+    assert replay(single_row, mcl, (0.3, 0.3, 0.0)) == [], 'expected no frames'
 
     print('mcl_offline tests passed')
 
