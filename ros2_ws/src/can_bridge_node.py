@@ -18,6 +18,7 @@ Imports are flat (from protocol import ...) to match every other script in
 this directory -- there is no can_bridge/ package on disk.
 """
 
+import csv
 import math
 
 import rclpy
@@ -36,6 +37,7 @@ from protocol import (
 )
 from can_interface import CanInterface
 from odometry import OdometryEstimator
+from mcl_log import COLUMNS as MCL_LOG_COLUMNS, build_row as build_mcl_log_row
 
 
 # RPi -> STM32 IDs. SocketCAN loops frames from other local sockets back to
@@ -80,6 +82,21 @@ class CanBridgeNode(Node):
             Range, '/ultrasonic/back', 10)
         self._tf_broadcaster = TransformBroadcaster(self)
         self._ultrasonic_update_count = 0
+
+        # ── MCL data logging (opt-in) ──
+        # One row per ultrasonic frame (~8Hz) carrying the latest odometry
+        # pose: one row is one MCL predict+update cycle, which is exactly
+        # what mcl_offline.py replays. Off unless a path is given.
+        log_path = self.declare_parameter('mcl_log', '').value
+        self._mcl_log_file = None
+        self._mcl_log_writer = None
+        self._last_pose = None
+        if log_path:
+            self._mcl_log_file = open(
+                log_path, 'w', newline='', encoding='utf-8')
+            self._mcl_log_writer = csv.writer(self._mcl_log_file)
+            self._mcl_log_writer.writerow(MCL_LOG_COLUMNS)
+            self.get_logger().info(f'MCL log -> {log_path}')
 
         # ── Subscribers ──
         self._rpm_sub = self.create_subscription(
@@ -159,6 +176,13 @@ class CanBridgeNode(Node):
             self._ultrasonic_back_pub, stamp, 'ultrasonic_back',
             reading['back_mm'], reading['back_valid'])
 
+        # Skip rows until odometry has produced its first pose, otherwise
+        # the replay would start from a pose that was never measured.
+        if self._mcl_log_writer is not None and self._last_pose is not None:
+            self._mcl_log_writer.writerow(
+                build_mcl_log_row(timestamp, self._last_pose, reading))
+            self._mcl_log_file.flush()
+
         self._ultrasonic_update_count += 1
         if self._ultrasonic_update_count % 4 == 0:  # about 2 Hz at 8 Hz
             right = (f"{reading['right_mm']}mm" if reading['right_valid']
@@ -185,6 +209,7 @@ class CanBridgeNode(Node):
             return  # first sample or out-of-order frame
 
         x, y, theta, vx, vy, omega = result
+        self._last_pose = (x, y, theta)
         self._publish_odom(x, y, theta, vx, vy, omega)
 
         if self._log_pose:
@@ -224,6 +249,8 @@ class CanBridgeNode(Node):
         self._tf_broadcaster.sendTransform(tf)
 
     def destroy_node(self):
+        if self._mcl_log_file is not None:
+            self._mcl_log_file.close()
         self._can.shutdown()
         super().destroy_node()
 
