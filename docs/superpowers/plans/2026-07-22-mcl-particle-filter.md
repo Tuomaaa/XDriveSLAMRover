@@ -548,7 +548,9 @@ git add ros2_ws/src/mcl.py && git commit -m "week6: MCL measurement update + low
 
 This is the task that proves the three pieces work together. It mimics the rover's real failure mode — open-loop yaw drift, recorded in PROJECT_STATE.md as -7 to -11 degrees over a straight run — and asserts the filter beats raw integration.
 
-- [ ] **Step 1: Write the failing test**
+**This task does not follow the red-green cycle**, unlike Tasks 1-3, 5 and 7. It is an integration check written over units that are already implemented and tested, so it is expected to pass on first run. There is no red phase to observe; a failure here means one of Tasks 1-3 is wrong, not that this test is doing its job.
+
+- [ ] **Step 1: Write the integration test**
 
 Create `ros2_ws/src/mcl_test.py`:
 
@@ -658,13 +660,13 @@ if __name__ == '__main__':
     run_convergence_test()
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [ ] **Step 2: Run the test and expect it to pass**
 
 ```bash
 python mcl_test.py
 ```
 
-Expected: PASS immediately if Tasks 1-3 are correct. This test is written last on purpose — it is an integration check over already-tested units, so a green run here is the signal that the three pieces compose. If it fails, the printed errors localize the fault: a large MCL error with small dead-reckoning error means the measurement update is mis-wired; both large means the motion model is.
+Expected: PASS, given Tasks 1-3 are correct. If it fails, the printed errors localize the fault: a large MCL error with a small dead-reckoning error means the measurement update is mis-wired; both large means the motion model is.
 
 This plan's code was run before being written down; the exact expected output is:
 
