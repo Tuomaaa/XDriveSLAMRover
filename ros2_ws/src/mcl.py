@@ -237,12 +237,38 @@ def _test_predict_respects_each_particle_heading():
     assert abs(y - 0.5) < 0.01, y
 
 
+def _test_predict_uses_per_particle_heading_not_a_shared_one():
+    """Split the cloud between opposite headings and step forward.
+
+    Particles facing 0 must move to +x while particles facing pi move to
+    -x. Any implementation that rotates by one shared heading -- including
+    a shared value derived from the particles, such as their mean -- moves
+    the whole cloud the same way and fails here. The two tests above
+    cannot catch that: their headings are a tight cluster, so a shared
+    mean is numerically indistinguishable from each particle's own value.
+    """
+    mcl = MCL(default_map(), default_beam_model(), SENSOR_CONFIGS,
+              num_particles=1000, rng_seed=11)
+    mcl.initialize(0.5825, 0.5825, 0.0, xy_spread=0.001, theta_spread=0.001)
+    half = mcl.num_particles // 2
+    mcl.particles[:half, 2] = 0.0
+    mcl.particles[half:, 2] = math.pi
+
+    mcl.predict(0.2, 0.0, 0.0)
+
+    forward_half = float(np.mean(mcl.particles[:half, 0]))
+    backward_half = float(np.mean(mcl.particles[half:, 0]))
+    assert forward_half > 0.75, forward_half
+    assert backward_half < 0.42, backward_half
+
+
 def _run_tests():
     _test_defaults_match_calibration()
     _test_initialize_and_estimate()
     _test_estimate_uses_circular_mean()
     _test_predict_advances_and_spreads()
     _test_predict_respects_each_particle_heading()
+    _test_predict_uses_per_particle_heading_not_a_shared_one()
     print('mcl tests passed')
 
 
