@@ -36,10 +36,11 @@ This plan was executed on branch `week6-mcl`. Task and final reviews found six d
 | 4 | **`predict` injects exactly zero noise when the rover is stationary**, while `update()` resamples every cycle regardless — collapsing 500 particles to 1 within ~1.5s of standstill. Every recording opens with idle rows, so this is not a corner case. | `e5a2033` adds `SIGMA_TRANS_FLOOR` / `SIGMA_ROT_FLOOR`, which also reflect this chassis's *systematic* (not motion-proportional) odometry error. Regression test included. |
 | 5 | Task 7's replay CLI hardcodes the library default `alpha`, though tuning it against a recording is the tool's stated purpose and the default scores materially worse (3.75cm vs 2.29cm on the test's own scenario). | `e5a2033` adds `--alpha`. |
 | 6 | Task 6 opens the log with mode `'w'`, silently truncating an existing recording if the operator forgets to change the parameter. Hardware sessions are expensive to repeat. | `e5a2033` refuses to overwrite. |
+| 7 | **`SIGMA_ROT_FLOOR = 0.002` (from fix 4) was itself too low.** It kept a *parked* cloud alive, which is all the parked test checked, but under motion it let the heading spread collapse to 0.4deg within ~7s — after which the filter could never revise its heading and the error grew without bound (+28.3deg at 52s, position RMS 10.2cm). Found by running a synthetic 60s wander through the shipped replay tool. | `19a63a1` raises it to 0.010 (mid-plateau; behaviour is flat 0.005-0.020). Position RMS drops to 0.9cm and heading tracks to 1.9deg. Adds `run_heading_tracking_test` in `mcl_test.py`, an arc with sustained rotation — it fails at 19.9deg with the old floor. The parked test in `mcl.py` provably cannot catch this. |
 
-Also corrected: the heading-observability explanation in Task 4 Step 3 and Task 8 Step 4 was wrong in mechanism (it said heading was *weakly* observed and noise-swamped, and gave the position bias in the wrong direction). Both sections now carry the exact statement. See Task 4 Step 3.
+Also corrected, twice: the heading-observability explanation in Task 4 Step 3 and Task 8 Step 4. It first claimed heading was *weakly* observed and noise-swamped, with the position bias in the wrong direction. The correction to "exactly unobservable" was right instantaneously but wrong as a claim about a moving robot, and it drew the wrong practical conclusion (reach for a third sensor). Both sections now carry the full statement: instantaneously degenerate, recoverable over a trajectory, gated by cloud heading diversity — a tuning parameter, not a hardware gap.
 
-Task 4's expected MCL error is now **2.1cm**, not 2.3cm — fix 4's rotation floor engages in that scenario.
+Task 4's expected MCL error is now **0.8cm** (was 2.3cm as originally written, 2.1cm after fix 4) — the rotation floor engages in that scenario too.
 
 ---
 
@@ -697,7 +698,7 @@ mcl        x=0.580 y=0.588  error=2.3cm  theta=+12.6deg
 MCL convergence test passed
 ```
 
-**Amended after the final review:** the process-noise floor added in commit `e5a2033` (see Amendments at the top of this plan) engages on the rotation term in this scenario, so the MCL error is now **2.1cm** and the assertions were tightened to `mcl_error < 0.04` and `mcl_error < dead_error / 2`. Dead reckoning is unchanged at 6.2cm.
+**Amended twice since (see Amendments at the top of this plan).** The process-noise floor from `e5a2033` engages on the rotation term here, and raising `SIGMA_ROT_FLOOR` to 0.010 in `19a63a1` improved it further. Current output: MCL error **0.8cm** with `theta=+5.3deg`; dead reckoning unchanged at 6.2cm. Assertions were tightened to `mcl_error < 0.04` and `mcl_error < dead_error / 2`. A second test, `run_heading_tracking_test`, was added alongside — see the note above it.
 
 - [ ] **Step 3: Understand why the MCL error is ~2cm and not ~0**
 
@@ -717,7 +718,20 @@ It is worth being precise that noise is *not* the explanation. If position were 
 
 **The position bias runs toward the walls, not away.** Following that curve, the filter reports `x·cos(theta)` — so at 12.6deg it sits about 2.4% *closer* to each measured wall, roughly `0.60 × (1 - cos(12.6deg)) = 1.44cm` per axis (the 90mm sensor offset cancels exactly), giving about 2.0cm combined. The remainder is particle noise. The observed `(0.580, 0.588)` against a true `(0.600, 0.600)` confirms the direction: both below truth.
 
-Position is otherwise fine because x and y *are* directly observable; heading is not. Carry this into Task 8's write-up rather than tuning it away. The fix is a third sensor or the Week 11 IMU, not a parameter — and note *which* third sensor: it must face an **opposing** wall. A front-facing beam measures `(x_max - x)`, which does not rescale the way `x` does, so the common `1/cos` factor no longer cancels and the degeneracy breaks (5.3 sigma separation at 12.6deg). A third beam parallel to an existing one would add nothing.
+**But that degeneracy is instantaneous, not permanent — and this is the part the first two versions of this section got wrong.** Everything above describes a *single static pose*. Over a trajectory the motion model couples successive poses: a wrong heading rotates the body-frame odometry delta the wrong way, so the particle travels in the wrong direction, and the *next* measurement contradicts it. Heading is therefore recoverable from motion, and the filter does recover it — to about 2 degrees over a 60-second run.
+
+What it needs in order to recover is **surviving particles that hold the alternative heading**. Because heading is the weakly-observed dimension, resampling impoverishes it first. Measured on a 60s synthetic wander (see Amendments, fix 7):
+
+| `SIGMA_ROT_FLOOR` | heading spread at 7s | heading error at 52s | position RMS |
+|---|---|---|---|
+| 0.002 rad | collapses to 0.4deg | **+28.3deg and still growing** | 10.2cm |
+| 0.010 rad | holds ~1deg | +1.9deg | **0.9cm** |
+
+Same alpha, same everything else — one constant. At the low floor the cloud commits to a heading within about 7 seconds and can never revise it, and the error then grows without bound. This is textbook particle impoverishment, and it shows up here in the weakly-observed dimension first.
+
+So the practical conclusion is the opposite of what this section originally said: **the fix is adequate process noise in the weakly-observed dimension, not more sensors.** A third beam facing an *opposing* wall would break even the instantaneous degeneracy (it measures `(x_max - x)`, which does not rescale the way `x` does, so the common `1/cos` factor no longer cancels — 5.3 sigma separation at 12.6deg), and the Week 11 IMU will help further. But neither is required for this filter to track heading. Do not reach for hardware to fix a tuning problem.
+
+The residual `1 - cos(theta)` position bias described above is real and still applies — it is just much smaller once heading is tracked to a couple of degrees.
 
 Copy the printed `dead-reck` and `mcl` figures into the commit message so the improvement is on the record.
 
@@ -1356,13 +1370,17 @@ Add a Week 6 section to the checklist recording: MCL implemented with standard p
 
 Add to the known-pitfalls section the limitation established in Task 4. Write it as the exact statement, not the loose one — this is going into the project's permanent record:
 
-> With two beams both referencing walls through the same origin corner, **heading is exactly unobservable, not merely weakly observed**. Each predicted range reduces to `coord/cos(theta) - 0.09`, so the whole family `(x·cos(theta), y·cos(theta), theta)` predicts bit-identical ranges (verified to machine epsilon across 0-30deg). The measurement is rank-2 over a 3-DOF state and this curve is its null direction. Sensor noise is *not* the reason — at 12.6deg a rotation would move each range 14.8mm against a 5.7mm sigma if position were held fixed. The filter absorbs the heading error by sliding position along the degenerate curve at zero likelihood cost.
+> **Instantaneously**, with two beams both referencing walls through the same origin corner, heading is *exactly* unobservable — not merely weakly observed. Each predicted range reduces to `coord/cos(theta) - 0.09`, so the whole family `(x·cos(theta), y·cos(theta), theta)` predicts bit-identical ranges (verified to machine epsilon across 0-30deg). The measurement is rank-2 over a 3-DOF state and this curve is its null direction. Sensor noise is *not* the reason — at 12.6deg a rotation would move each range 14.8mm against a 5.7mm sigma if position were held fixed.
 >
-> Downstream consequence, which otherwise looks like a bug: an uncorrected heading error `theta` puts the estimate about `1 - cos(theta)` **closer** to each measured wall — 12.6deg gave 1.44cm per axis, ~2cm combined, in the synthetic test. Note the direction: closer, not farther.
+> **Over a trajectory, heading is recoverable.** The motion model couples successive poses: a wrong heading rotates the body-frame odometry delta the wrong way, the particle travels in the wrong direction, and the next measurement contradicts it. The filter tracks heading to about 2deg over a 60s run.
 >
-> The fix is a third sensor or the Week 11 IMU, **not** a parameter to tune — and the third sensor must face an **opposing** wall, since `(x_max - x)` does not rescale the way `x` does and so breaks the degeneracy. A beam parallel to an existing one adds nothing.
+> **What it needs is heading diversity in the cloud, and that is a tuning parameter.** Heading being the weakly-observed dimension means resampling impoverishes it first. Measured on a 60s synthetic wander, varying only `SIGMA_ROT_FLOOR`: at 0.002 rad the heading spread collapses to 0.4deg within ~7s, the cloud can never revise its heading, and error grows to +28.3deg by 52s (position RMS 10.2cm). At 0.010 rad the spread holds near 1deg, heading tracks to +1.9deg, and position RMS is 0.9cm. Same alpha, one constant. This is textbook particle impoverishment.
+>
+> Residual consequence once heading *is* tracked: an uncorrected heading error `theta` puts the estimate about `1 - cos(theta)` **closer** to each measured wall (closer, not farther). Small at 2deg; it was ~2cm at 12.6deg.
+>
+> **Do not reach for hardware to fix this.** A third beam facing an *opposing* wall would break even the instantaneous degeneracy (`(x_max - x)` does not rescale the way `x` does, so the `1/cos` factor stops cancelling — 5.3 sigma separation at 12.6deg), and the Week 11 IMU will help further. Neither is required for the filter to track heading.
 
-Also record the process-noise floor (`SIGMA_TRANS_FLOOR` / `SIGMA_ROT_FLOOR` in `mcl.py`) and why it exists: without it a parked rover injects zero process noise while `update()` keeps resampling, collapsing 500 particles to 1 within ~1.5s. Every recording opens with idle rows, so this is not a corner case.
+Also record the process-noise floor (`SIGMA_TRANS_FLOOR` / `SIGMA_ROT_FLOOR` in `mcl.py`) and its two independent jobs: without it a parked rover injects zero process noise while `update()` keeps resampling, collapsing 500 particles to 1 within ~1.5s (every recording opens with idle rows, so this is not a corner case); and `SIGMA_ROT_FLOOR` specifically is what preserves the heading diversity described above. Note that the parked-cloud test in `mcl.py` cannot catch the second failure — a stationary rover's heading barely affects the predicted ranges, so nothing prunes the spread and it looks healthy at either floor. `mcl_test.py`'s arc test is what pins it.
 
 Add a decision-log row for the holonomic motion model: noise applied to body-frame dx/dy/dtheta rather than the textbook rot1/trans/rot2 decomposition, because that decomposition assumes a differential drive that must turn in order to translate, which this chassis does not.
 

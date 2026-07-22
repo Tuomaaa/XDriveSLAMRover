@@ -40,16 +40,30 @@ BEAM_WEIGHTS = {'w_hit': 0.94, 'w_short': 0.01, 'w_max': 0.03, 'w_rand': 0.02}
 Z_MAX = 4.0
 LAMBDA_SHORT = 0.5
 
-# Floor on the per-step process noise. A strictly proportional-to-motion
-# model injects exactly zero noise when the rover is parked, while update()
-# keeps resampling every cycle -- which collapses 500 particles to 1 within
-# about 1.5s of standstill, leaving the filter with no representation of its
-# own uncertainty. A floor also reflects reality: this chassis's dominant
-# odometry error is systematic (~3% scale, 7-11deg yaw per run), which no
-# motion-proportional term can express at zero motion, and encoder
-# quantization bounds what position can be known regardless.
+# Floor on the per-step process noise. Two separate reasons, and the second
+# one is what actually sizes SIGMA_ROT_FLOOR.
+#
+# 1. A strictly proportional-to-motion model injects exactly zero noise when
+#    the rover is parked, while update() keeps resampling every cycle --
+#    which collapses 500 particles to 1 within about 1.5s of standstill.
+#    A floor also reflects reality: this chassis's dominant odometry error
+#    is systematic (~3% scale, 7-11deg yaw per run), which no
+#    motion-proportional term can express at zero motion, and encoder
+#    quantization bounds what position can be known regardless.
+#
+# 2. Heading is the weakly-observed dimension here (see the note in
+#    predict), so resampling impoverishes it FIRST. CALIBRATED 2026-07-22
+#    against a 60s synthetic wander in the box: at a 0.002 rot floor the
+#    cloud's heading spread collapsed to 0.4deg within ~7s and never
+#    recovered, and heading error then grew without bound -- 0.1deg at
+#    start to 28.3deg by 52s, dragging position RMS to 10.2cm. Raising ONLY
+#    this constant to 0.005+ (translation floor and alpha untouched) held
+#    the spread near 1deg and the filter tracked heading to ~2deg, cutting
+#    position RMS to 1.0cm. Behaviour is flat from 0.005 to 0.020, so 0.010
+#    sits mid-plateau rather than on an edge; it degrades again by 0.040.
+#    The translation floor was swept the same way and 0.001 is mid-plateau.
 SIGMA_TRANS_FLOOR = 0.001   # metres per step
-SIGMA_ROT_FLOOR = 0.002     # radians per step
+SIGMA_ROT_FLOOR = 0.010     # radians per step
 
 # Sensor mounting: (bearing on the robot, (x, y) offset from base_link),
 # REP-103 body frame (+x forward, +y left).
@@ -355,6 +369,12 @@ def _test_predict_keeps_a_parked_cloud_alive():
     resamples every cycle regardless, so without a noise floor the cloud
     drops to a single distinct particle within ~1.5s of standstill and the
     filter stops representing its own uncertainty.
+
+    The heading assertion is the one that matters most. Heading is the
+    weakly-observed dimension, so resampling impoverishes it first: at a
+    0.002 rot floor the spread collapsed to 0.4deg and heading error then
+    grew without bound over a 60s run. Position spread alone would not
+    have caught that.
     """
     rect_map = default_map()
     mcl = MCL(rect_map, default_beam_model(), SENSOR_CONFIGS,
@@ -371,6 +391,11 @@ def _test_predict_keeps_a_parked_cloud_alive():
     distinct = len(np.unique(mcl.particles[:, 0]))
     assert distinct > 20, f'cloud collapsed to {distinct} distinct particles'
     assert float(np.std(mcl.particles[:, 0])) > 1e-4, np.std(mcl.particles[:, 0])
+
+    # Sustained tracking needs roughly a degree of heading spread; below
+    # that the filter commits to a heading it can never revise.
+    theta_spread = math.degrees(float(np.std(mcl.particles[:, 2])))
+    assert theta_spread > 0.5, f'heading spread collapsed to {theta_spread:.2f}deg'
 
 
 def _test_update_concentrates_on_the_truth():
