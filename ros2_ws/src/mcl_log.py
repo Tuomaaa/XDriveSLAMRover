@@ -73,7 +73,7 @@ def _run_tests():
 
     valid = {'right_mm': 493, 'back_mm': 392,
              'right_valid': True, 'back_valid': True}
-    row = build_row(12.5, (0.5825, 0.5825, 0.0), valid)
+    row = build_row(12.5, (0.5825, 0.61, 0.0), valid)
     assert len(row) == len(COLUMNS), row
     assert row[4] == 493 and row[6] == 1, row
 
@@ -87,7 +87,7 @@ def _run_tests():
         with path.open('w', newline='', encoding='utf-8') as sink:
             writer = csv.writer(sink)
             writer.writerow(COLUMNS)
-            writer.writerow(build_row(12.5, (0.5825, 0.5825, 0.0), valid))
+            writer.writerow(build_row(12.5, (0.5825, 0.61, 0.0), valid))
             writer.writerow(build_row(12.6, (0.60, 0.58, 0.10), invalid_right))
         entries = read_log(path)
 
@@ -102,12 +102,21 @@ def _run_tests():
             raise AssertionError('an empty log should raise')
 
     assert len(entries) == 2, entries
+    # Every field read_log returns is asserted, and row 0's x and y differ,
+    # so neither a swapped coordinate pair nor a dropped timestamp can hide
+    # behind a symmetric fixture.
+    assert abs(entries[0]['timestamp_s'] - 12.5) < 1e-9, entries[0]
     assert abs(entries[0]['odom_x'] - 0.5825) < 1e-9, entries[0]
+    assert abs(entries[0]['odom_y'] - 0.61) < 1e-9, entries[0]
+    assert abs(entries[0]['odom_theta']) < 1e-9, entries[0]
     assert abs(entries[0]['right_m'] - 0.493) < 1e-9, entries[0]
     assert abs(entries[0]['back_m'] - 0.392) < 1e-9, entries[0]
+    assert abs(entries[1]['timestamp_s'] - 12.6) < 1e-9, entries[1]
+    assert abs(entries[1]['odom_x'] - 0.60) < 1e-9, entries[1]
+    assert abs(entries[1]['odom_y'] - 0.58) < 1e-9, entries[1]
+    assert abs(entries[1]['odom_theta'] - 0.10) < 1e-9, entries[1]
     assert entries[1]['right_m'] is None, entries[1]
     assert abs(entries[1]['back_m'] - 0.392) < 1e-9, entries[1]
-    assert abs(entries[1]['odom_theta'] - 0.10) < 1e-9, entries[1]
     print('mcl_log tests passed')
 
 
