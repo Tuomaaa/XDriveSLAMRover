@@ -178,6 +178,12 @@ def parse_args():
         help='True starting pose in the map: metres, metres, degrees.')
     parser.add_argument('--output', type=Path, default=Path('mcl_replay.gif'))
     parser.add_argument('--particles', type=int, default=500)
+    parser.add_argument(
+        '--alpha', nargs=4, type=float,
+        default=[0.05, 0.01, 0.01, 0.05],
+        metavar=('A_TT', 'A_TR', 'A_RT', 'A_RR'),
+        help='Motion noise: how much translation and rotation noise each '
+             'unit of distance travelled and angle turned contributes.')
     parser.add_argument('--stride', type=int, default=2,
                         help='Render every Nth step (default 2).')
     parser.add_argument('--fps', type=int, default=10)
@@ -189,6 +195,8 @@ def parse_args():
         parser.error('--stride must be positive')
     if args.fps < 1:
         parser.error('--fps must be positive')
+    if any(value < 0.0 for value in args.alpha):
+        parser.error('--alpha entries must be non-negative')
     return args
 
 
@@ -199,7 +207,8 @@ def main():
 
     rect_map = default_map()
     mcl = MCL(rect_map, default_beam_model(), SENSOR_CONFIGS,
-              num_particles=args.particles, rng_seed=args.seed)
+              num_particles=args.particles, alpha=tuple(args.alpha),
+              rng_seed=args.seed)
     frames = replay(entries, mcl, start_pose)
     if not frames:
         raise SystemExit(
@@ -247,6 +256,15 @@ def _run_tests():
     assert abs(mapped[0] - 0.3) < 1e-9, mapped
     assert abs(mapped[1] - 0.6) < 1e-9, mapped
     assert abs(mapped[2] - math.pi / 2) < 1e-9, mapped
+
+    # Nonzero odom origin, nonzero origin heading, and a displacement with a
+    # sideways component -- none of which the case above exercises. Mutating
+    # either the origin subtraction or the dy terms passes without this.
+    mapped = odom_to_map((1.2, 1.1, 0.0), (1.0, 1.0, math.pi / 2),
+                         (0.5, 0.5, 0.0))
+    assert abs(mapped[0] - 0.6) < 1e-9, mapped
+    assert abs(mapped[1] - 0.3) < 1e-9, mapped
+    assert abs(mapped[2] + math.pi / 2) < 1e-9, mapped
 
     # A one-row log yields no filter steps: the first row only establishes
     # the odometry origin. main() turns this into a clear message rather

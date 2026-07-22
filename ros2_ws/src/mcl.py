@@ -13,9 +13,13 @@ Design notes:
   - The textbook odometry motion model splits a step into rot1/trans/rot2,
     which assumes a differential drive that must turn in order to
     translate. This chassis is holonomic, so noise is applied directly to
-    the body-frame (dx, dy, dtheta) instead. The alpha parameters keep
-    their meaning: uncertainty grows with distance travelled and angle
-    turned.
+    the body-frame (dx, dy, dtheta) instead. The alpha parameters keep only
+    the same ROLE as Probabilistic Robotics Table 5.6 (uncertainty grows
+    with distance travelled and angle turned), not the same NUMBERS: the
+    book's alphas multiply squared deltas to produce a variance, while
+    these multiply an un-squared delta to produce a standard deviation
+    directly. Do not carry Table 5.6 values over here -- they would be off
+    by orders of magnitude.
   - The measurement update delegates to BeamModel/RectMap, which already
     carry the Week 5 bench calibration.
 """
@@ -35,6 +39,17 @@ SIGMA_HIT = (0.0017, 0.0078)
 BEAM_WEIGHTS = {'w_hit': 0.94, 'w_short': 0.01, 'w_max': 0.03, 'w_rand': 0.02}
 Z_MAX = 4.0
 LAMBDA_SHORT = 0.5
+
+# Floor on the per-step process noise. A strictly proportional-to-motion
+# model injects exactly zero noise when the rover is parked, while update()
+# keeps resampling every cycle -- which collapses 500 particles to 1 within
+# about 1.5s of standstill, leaving the filter with no representation of its
+# own uncertainty. A floor also reflects reality: this chassis's dominant
+# odometry error is systematic (~3% scale, 7-11deg yaw per run), which no
+# motion-proportional term can express at zero motion, and encoder
+# quantization bounds what position can be known regardless.
+SIGMA_TRANS_FLOOR = 0.001   # metres per step
+SIGMA_ROT_FLOOR = 0.002     # radians per step
 
 # Sensor mounting: (bearing on the robot, (x, y) offset from base_link),
 # REP-103 body frame (+x forward, +y left).
@@ -62,7 +77,7 @@ def default_beam_model():
 
 
 def _wrap_angle(angle):
-    """Wrap to (-pi, pi]. Works on scalars and numpy arrays alike."""
+    """Wrap to [-pi, pi]. Works on scalars and numpy arrays alike."""
     return np.arctan2(np.sin(angle), np.cos(angle))
 
 
@@ -116,11 +131,16 @@ class MCL:
 
         distance = math.hypot(dx_body, dy_body)
         turned = abs(dtheta)
-        sigma_trans = a_trans_trans * distance + a_trans_rot * turned
-        sigma_rot = a_rot_trans * distance + a_rot_rot * turned
+        sigma_trans = max(a_trans_trans * distance + a_trans_rot * turned,
+                          SIGMA_TRANS_FLOOR)
+        sigma_rot = max(a_rot_trans * distance + a_rot_rot * turned,
+                        SIGMA_ROT_FLOOR)
 
-        # numpy accepts scale=0.0 and returns the mean, so a stationary
-        # step correctly adds no spread.
+        # The floor keeps a parked cloud alive: predict(0, 0, 0) would
+        # otherwise inject exactly zero spread, and update() resamples every
+        # cycle regardless of whether the robot moved, so with no floor the
+        # population collapses onto whichever particle currently scores
+        # highest within a couple of seconds of standing still.
         noisy_dx = dx_body + self._rng.normal(0.0, sigma_trans, count)
         noisy_dy = dy_body + self._rng.normal(0.0, sigma_trans, count)
         noisy_dtheta = dtheta + self._rng.normal(0.0, sigma_rot, count)
@@ -194,7 +214,15 @@ class MCL:
 
     def estimate(self):
         """Weighted mean pose; theta uses a circular mean so that headings
-        either side of +/-pi do not average to zero."""
+        either side of +/-pi do not average to zero.
+
+        In the normal predict/update flow this is actually an unweighted
+        mean: update() ends every cycle with a resample that resets weights
+        to uniform, so by the time estimate() is called there is nothing
+        left to weight by. Like any mean estimator, it also assumes the
+        cloud is unimodal -- a cloud with two separated clusters produces a
+        pose in between them, not the more likely of the two.
+        """
         x = float(np.sum(self.weights * self.particles[:, 0]))
         y = float(np.sum(self.weights * self.particles[:, 1]))
         sin_sum = float(np.sum(self.weights * np.sin(self.particles[:, 2])))
@@ -320,6 +348,31 @@ def _test_predict_uses_per_particle_heading_not_a_shared_one():
     assert backward_half < 0.42, backward_half
 
 
+def _test_predict_keeps_a_parked_cloud_alive():
+    """A stationary rover must not collapse the cloud.
+
+    predict(0,0,0) injects zero motion-proportional noise, but update()
+    resamples every cycle regardless, so without a noise floor the cloud
+    drops to a single distinct particle within ~1.5s of standstill and the
+    filter stops representing its own uncertainty.
+    """
+    rect_map = default_map()
+    mcl = MCL(rect_map, default_beam_model(), SENSOR_CONFIGS,
+              num_particles=500, rng_seed=12)
+    true_pose = (0.5825, 0.5825, 0.0)
+    mcl.initialize(*true_pose, xy_spread=0.05, theta_spread=0.02)
+    measurements = [rect_map.expected_range(true_pose, angle, offset)
+                    for angle, offset in SENSOR_CONFIGS]
+
+    for _ in range(40):          # 5 seconds at 8Hz
+        mcl.predict(0.0, 0.0, 0.0)
+        mcl.update(measurements)
+
+    distinct = len(np.unique(mcl.particles[:, 0]))
+    assert distinct > 20, f'cloud collapsed to {distinct} distinct particles'
+    assert float(np.std(mcl.particles[:, 0])) > 1e-4, np.std(mcl.particles[:, 0])
+
+
 def _test_update_concentrates_on_the_truth():
     rect_map = default_map()
     mcl = MCL(rect_map, default_beam_model(), SENSOR_CONFIGS,
@@ -387,6 +440,7 @@ def _run_tests():
     _test_predict_advances_and_spreads()
     _test_predict_respects_each_particle_heading()
     _test_predict_uses_per_particle_heading_not_a_shared_one()
+    _test_predict_keeps_a_parked_cloud_alive()
     _test_update_concentrates_on_the_truth()
     _test_update_tolerates_a_dead_sensor()
     _test_resample_duplicates_by_weight()

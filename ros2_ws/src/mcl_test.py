@@ -94,8 +94,13 @@ def run_convergence_test():
           f'error={mcl_error * 100:.1f}cm  '
           f'theta={math.degrees(est_theta):+.1f}deg')
 
-    assert mcl_error < 0.05, f'MCL off by {mcl_error * 100:.1f}cm'
-    assert mcl_error < dead_error, (mcl_error, dead_error)
+    # A filter that silently stopped correcting would converge toward
+    # dead_error, so a bare "better than dead reckoning" comparison is close
+    # to a coin flip. Require a clear margin instead, which also pins the
+    # alpha this test ships with -- the library default scores materially
+    # worse on this same scenario.
+    assert mcl_error < 0.04, f'MCL off by {mcl_error * 100:.1f}cm'
+    assert mcl_error < dead_error / 2.0, (mcl_error, dead_error)
     print('\nMCL convergence test passed')
 
 

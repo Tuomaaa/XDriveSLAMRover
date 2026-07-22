@@ -20,6 +20,7 @@ this directory -- there is no can_bridge/ package on disk.
 
 import csv
 import math
+import os
 
 import rclpy
 from rclpy.node import Node
@@ -92,6 +93,10 @@ class CanBridgeNode(Node):
         self._mcl_log_writer = None
         self._last_pose = None
         if log_path:
+            if os.path.exists(log_path):
+                raise RuntimeError(
+                    f'{log_path} already exists. Refusing to overwrite a '
+                    'recording -- choose a new path.')
             self._mcl_log_file = open(
                 log_path, 'w', newline='', encoding='utf-8')
             self._mcl_log_writer = csv.writer(self._mcl_log_file)
