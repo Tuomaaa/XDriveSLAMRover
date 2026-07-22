@@ -102,6 +102,38 @@ class MCL:
         self._clamp_to_map()
         self.weights = np.full(count, 1.0 / count)
 
+    def predict(self, dx_body, dy_body, dtheta):
+        """Advance every particle by a body-frame odometry delta plus noise.
+
+        dx_body / dy_body are the translation the robot believes it made in
+        its OWN frame since the last call; dtheta is the heading change.
+        Each particle rotates that delta by its own heading, so particles
+        that disagree about which way they are pointing end up in different
+        places -- that divergence is exactly what update() then prunes.
+        """
+        count = self.num_particles
+        a_trans_trans, a_trans_rot, a_rot_trans, a_rot_rot = self.alpha
+
+        distance = math.hypot(dx_body, dy_body)
+        turned = abs(dtheta)
+        sigma_trans = a_trans_trans * distance + a_trans_rot * turned
+        sigma_rot = a_rot_trans * distance + a_rot_rot * turned
+
+        # numpy accepts scale=0.0 and returns the mean, so a stationary
+        # step correctly adds no spread.
+        noisy_dx = dx_body + self._rng.normal(0.0, sigma_trans, count)
+        noisy_dy = dy_body + self._rng.normal(0.0, sigma_trans, count)
+        noisy_dtheta = dtheta + self._rng.normal(0.0, sigma_rot, count)
+
+        heading = self.particles[:, 2].copy()
+        cos_h = np.cos(heading)
+        sin_h = np.sin(heading)
+
+        self.particles[:, 0] += noisy_dx * cos_h - noisy_dy * sin_h
+        self.particles[:, 1] += noisy_dx * sin_h + noisy_dy * cos_h
+        self.particles[:, 2] = _wrap_angle(heading + noisy_dtheta)
+        self._clamp_to_map()
+
     def estimate(self):
         """Weighted mean pose; theta uses a circular mean so that headings
         either side of +/-pi do not average to zero."""
@@ -178,10 +210,39 @@ def _test_estimate_uses_circular_mean():
     assert abs(abs(theta) - math.pi) < math.radians(2), math.degrees(theta)
 
 
+def _test_predict_advances_and_spreads():
+    mcl = MCL(default_map(), default_beam_model(), SENSOR_CONFIGS,
+              num_particles=2000, rng_seed=2)
+    mcl.initialize(0.3, 0.5825, 0.0, xy_spread=0.01, theta_spread=0.01)
+    spread_before = float(np.std(mcl.particles[:, 0]))
+
+    mcl.predict(0.2, 0.0, 0.0)   # 200mm straight ahead, no turn
+
+    x, y, theta = mcl.estimate()
+    assert abs(x - 0.5) < 0.01, x          # world +x by 0.2
+    assert abs(y - 0.5825) < 0.01, y       # no sideways drift
+    assert abs(theta) < 0.02, theta
+    assert float(np.std(mcl.particles[:, 0])) > spread_before
+
+
+def _test_predict_respects_each_particle_heading():
+    """Facing +90deg, a body-frame forward step must land on world +y."""
+    mcl = MCL(default_map(), default_beam_model(), SENSOR_CONFIGS,
+              num_particles=2000, rng_seed=3)
+    mcl.initialize(0.5825, 0.3, math.pi / 2, xy_spread=0.01, theta_spread=0.01)
+    mcl.predict(0.2, 0.0, 0.0)
+
+    x, y, _ = mcl.estimate()
+    assert abs(x - 0.5825) < 0.01, x
+    assert abs(y - 0.5) < 0.01, y
+
+
 def _run_tests():
     _test_defaults_match_calibration()
     _test_initialize_and_estimate()
     _test_estimate_uses_circular_mean()
+    _test_predict_advances_and_spreads()
+    _test_predict_respects_each_particle_heading()
     print('mcl tests passed')
 
 
