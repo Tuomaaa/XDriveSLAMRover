@@ -24,6 +24,25 @@
 
 ---
 
+## Amendments — read before transcribing any code block below
+
+This plan was executed on branch `week6-mcl`. Task and final reviews found six defects **in this plan's own code blocks**. The shipped code is correct; the code blocks below are not, except where a task's text says otherwise. If you are re-executing this plan, apply these on top:
+
+| # | Plan defect | Shipped fix |
+|---|---|---|
+| 1 | Task 2's two `predict` tests both use a tight heading cluster (`theta_spread=0.01`), so rotating by a single shared *mean* heading passes them — proven by mutation. The property the whole filter depends on had no regression net. | `0dc27f5` adds `_test_predict_uses_per_particle_heading_not_a_shared_one`, splitting the cloud between 0 and pi so the halves must move in opposite directions. |
+| 2 | Task 5's round-trip test uses `odom_x == odom_y` in its fixture and never asserts `timestamp_s`. Swapping the coordinates or dropping the timestamp inside `build_row` both passed — proven by mutation. | `187a06d` gives row 0 distinct x/y and asserts all six fields `read_log` returns, on both rows. |
+| 3 | Task 7's `main()` does `frames[-1]` with no guard. A one-row log clears `read_log`'s empty check but produces zero filter steps, so it dies on `IndexError`. A recording cut short after one CAN frame is plausible. | `2ffe573` exits with a clear message. Also validates `--fps`, which could reach a division by zero. |
+| 4 | **`predict` injects exactly zero noise when the rover is stationary**, while `update()` resamples every cycle regardless — collapsing 500 particles to 1 within ~1.5s of standstill. Every recording opens with idle rows, so this is not a corner case. | `e5a2033` adds `SIGMA_TRANS_FLOOR` / `SIGMA_ROT_FLOOR`, which also reflect this chassis's *systematic* (not motion-proportional) odometry error. Regression test included. |
+| 5 | Task 7's replay CLI hardcodes the library default `alpha`, though tuning it against a recording is the tool's stated purpose and the default scores materially worse (3.75cm vs 2.29cm on the test's own scenario). | `e5a2033` adds `--alpha`. |
+| 6 | Task 6 opens the log with mode `'w'`, silently truncating an existing recording if the operator forgets to change the parameter. Hardware sessions are expensive to repeat. | `e5a2033` refuses to overwrite. |
+
+Also corrected: the heading-observability explanation in Task 4 Step 3 and Task 8 Step 4 was wrong in mechanism (it said heading was *weakly* observed and noise-swamped, and gave the position bias in the wrong direction). Both sections now carry the exact statement. See Task 4 Step 3.
+
+Task 4's expected MCL error is now **2.1cm**, not 2.3cm — fix 4's rotation floor engages in that scenario.
+
+---
+
 ## File Structure
 
 | File | Responsibility |
@@ -668,7 +687,7 @@ python mcl_test.py
 
 Expected: PASS, given Tasks 1-3 are correct. If it fails, the printed errors localize the fault: a large MCL error with a small dead-reckoning error means the measurement update is mis-wired; both large means the motion model is.
 
-This plan's code was run before being written down; the exact expected output is:
+This plan's code was run before being written down. The output at the time was:
 
 ```
 true       x=0.600 y=0.600
@@ -678,15 +697,27 @@ mcl        x=0.580 y=0.588  error=2.3cm  theta=+12.6deg
 MCL convergence test passed
 ```
 
-- [ ] **Step 3: Understand why the MCL error is 2.3cm and not ~0**
+**Amended after the final review:** the process-noise floor added in commit `e5a2033` (see Amendments at the top of this plan) engages on the rotation term in this scenario, so the MCL error is now **2.1cm** and the assertions were tightened to `mcl_error < 0.04` and `mcl_error < dead_error / 2`. Dead reckoning is unchanged at 6.2cm.
+
+- [ ] **Step 3: Understand why the MCL error is ~2cm and not ~0**
 
 Do not "fix" this — it is the real behaviour of this sensor arrangement, and recognizing it is the point of the exercise.
 
-The filter ends up believing `theta=+12.6deg` when the truth is 0. That is the injected yaw bias (0.002 rad × 120 steps = 13.8deg) being integrated almost uncorrected, because **two orthogonal beams in a rectangular room barely observe heading**: rotating by a small angle changes an expected range only as `1/cos(theta)`, a second-order effect that the ~3mm sensor noise swamps.
+The filter ends up believing `theta=+12.6deg` when the truth is 0. That is the injected yaw bias (0.002 rad × 120 steps = 13.8deg) being integrated **completely uncorrected**, and the reason is stronger than "the sensors are noisy":
 
-That heading error then biases position. Believing it is rotated by 12.6deg, the filter reads each range as `distance/cos(12.6deg)`, so it places itself about 2.4% short of each wall — roughly 1.2cm at these distances, on both axes. That is exactly the 2.3cm observed.
+**Heading is not weakly observed here — it is exactly unobservable.** Both beams reference walls through the same origin corner (right measures to `y_min`, back to `x_min`), so each predicted range reduces to `coord/cos(theta) - 0.09`. That means the entire one-parameter family of poses
 
-Position is fine because x and y *are* directly observable; heading is not. Carry this into Task 8's write-up rather than tuning it away. The fix is a third sensor or the Week 11 IMU, not a parameter.
+```
+(x·cos(theta),  y·cos(theta),  theta)
+```
+
+predicts **bit-identical** ranges for every theta. Sweeping theta from 0 to 30 degrees changes the predicted pair by between `0` and `1.1e-16` metres — machine epsilon. The two-beam measurement is rank-2 over a 3-DOF state, and this curve is its null direction. No amount of averaging over 120 steps recovers heading, because there is no information there to average.
+
+It is worth being precise that noise is *not* the explanation. If position were pinned at the truth, a 12.6deg rotation would shift each range by 14.8mm against a calibrated sigma of 5.7mm at 0.51m — 2.6 sigma per reading, tens of sigma over the run. That would be crushed, not swamped. The filter tolerates the heading error only because it can slide its *position* along the degenerate curve at zero likelihood cost.
+
+**The position bias runs toward the walls, not away.** Following that curve, the filter reports `x·cos(theta)` — so at 12.6deg it sits about 2.4% *closer* to each measured wall, roughly `0.60 × (1 - cos(12.6deg)) = 1.44cm` per axis (the 90mm sensor offset cancels exactly), giving about 2.0cm combined. The remainder is particle noise. The observed `(0.580, 0.588)` against a true `(0.600, 0.600)` confirms the direction: both below truth.
+
+Position is otherwise fine because x and y *are* directly observable; heading is not. Carry this into Task 8's write-up rather than tuning it away. The fix is a third sensor or the Week 11 IMU, not a parameter — and note *which* third sensor: it must face an **opposing** wall. A front-facing beam measures `(x_max - x)`, which does not rescale the way `x` does, so the common `1/cos` factor no longer cancels and the degeneracy breaks (5.3 sigma separation at 12.6deg). A third beam parallel to an existing one would add nothing.
 
 Copy the printed `dead-reck` and `mcl` figures into the commit message so the improvement is on the record.
 
@@ -1323,7 +1354,15 @@ If the cloud collapses to a point and then cannot follow the rover, raise the tr
 
 Add a Week 6 section to the checklist recording: MCL implemented with standard predict/update/low-variance-resample; the alpha values in use and how they were chosen; and the measured MCL-vs-dead-reckoning separation from the real run.
 
-Add to the known-pitfalls section the limitation established in Task 4: with only two orthogonal beams in a rectangular room, x and y are directly observable but **heading is not** — a small rotation changes an expected range only as `1/cos(theta)`, which the ~3mm sensor noise swamps. Note the downstream consequence, since it will otherwise look like a bug: an uncorrected heading error of `theta` makes the filter read every range as `distance/cos(theta)` and sit that fraction short of each wall (12.6deg of heading error produced 2.3cm of position error in the synthetic test). Record that the fix is a third sensor or the Week 11 IMU, **not** a parameter to tune.
+Add to the known-pitfalls section the limitation established in Task 4. Write it as the exact statement, not the loose one — this is going into the project's permanent record:
+
+> With two beams both referencing walls through the same origin corner, **heading is exactly unobservable, not merely weakly observed**. Each predicted range reduces to `coord/cos(theta) - 0.09`, so the whole family `(x·cos(theta), y·cos(theta), theta)` predicts bit-identical ranges (verified to machine epsilon across 0-30deg). The measurement is rank-2 over a 3-DOF state and this curve is its null direction. Sensor noise is *not* the reason — at 12.6deg a rotation would move each range 14.8mm against a 5.7mm sigma if position were held fixed. The filter absorbs the heading error by sliding position along the degenerate curve at zero likelihood cost.
+>
+> Downstream consequence, which otherwise looks like a bug: an uncorrected heading error `theta` puts the estimate about `1 - cos(theta)` **closer** to each measured wall — 12.6deg gave 1.44cm per axis, ~2cm combined, in the synthetic test. Note the direction: closer, not farther.
+>
+> The fix is a third sensor or the Week 11 IMU, **not** a parameter to tune — and the third sensor must face an **opposing** wall, since `(x_max - x)` does not rescale the way `x` does and so breaks the degeneracy. A beam parallel to an existing one adds nothing.
+
+Also record the process-noise floor (`SIGMA_TRANS_FLOOR` / `SIGMA_ROT_FLOOR` in `mcl.py`) and why it exists: without it a parked rover injects zero process noise while `update()` keeps resampling, collapsing 500 particles to 1 within ~1.5s. Every recording opens with idle rows, so this is not a corner case.
 
 Add a decision-log row for the holonomic motion model: noise applied to body-frame dx/dy/dtheta rather than the textbook rot1/trans/rot2 decomposition, because that decomposition assumes a differential drive that must turn in order to translate, which this chassis does not.
 
