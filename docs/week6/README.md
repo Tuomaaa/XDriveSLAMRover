@@ -19,17 +19,38 @@ python3 mcl_wander_sim.py --gif before.gif --rot-floor 0.002
 python3 mcl_wander_sim.py --sweep
 ```
 
-## What to look for
+## Reading the panels
 
-In **before**, the red MCL trail drifts *alongside* the green dead-reckoning
-trail. That is the tell, and it is why this is worth keeping: the failure
-does not look like a filter going haywire. It looks like a filter quietly
-giving up and echoing the odometry it was supposed to correct. The estimate
-stays smooth, stays inside the box, and stays plausible — while being 27 cm
-and 34 degrees wrong at the end.
+Three panels, because no one of them shows the whole story.
 
-In **after**, red stays on the true path and traces it repeatably, while
-green spirals away as the 55 degrees of accumulated yaw drift compounds.
+**Left — overview.** The dotted grey line is the true path; red is the MCL
+estimate, green is raw dead reckoning. In **after**, red sits on the dotted
+line and traces it repeatably while green spirals away as 55 degrees of
+accumulated yaw drift compounds. In **before**, red drifts *alongside*
+green.
+
+That is the tell, and it is why the failure case is worth keeping: it does
+not look like a filter going haywire. It looks like a filter quietly giving
+up and echoing the odometry it was supposed to correct. The estimate stays
+smooth, stays inside the box, and stays plausible — while being 27 cm and
+34 degrees wrong at the end.
+
+**Top right — particle cloud**, a ±6 cm window centred on the *true* pose.
+At box scale a converged cloud is about 1% of the frame and is simply
+invisible, which is why it gets its own panel. In **after** the cloud stays
+wrapped around the black cross with the red estimate inside it. In
+**before** the panel goes blank and annotates how far away the cloud has
+gone — by the end it is nowhere near the truth.
+
+**Bottom right — position error vs. time.** The most direct answer to "is
+it working". Red flat near zero; green climbing. In the failure case red
+tracks green instead of staying flat, which is the same story the overview
+tells, quantified.
+
+Note that all three panels need ground truth, which a real recording does
+not have. `mcl_offline.py` renders the single-panel view you get on real
+data; this richer view lives in `mcl_wander_sim.py` because only the
+synthetic run knows the answer.
 
 ## Why it happened
 

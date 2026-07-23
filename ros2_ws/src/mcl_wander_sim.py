@@ -229,6 +229,177 @@ def print_stats(label, stats):
     print(f'    heading spread at 7s {stats["theta_spread_early"]:5.2f}deg')
 
 
+def render_with_truth(frames, truth, rect_map, output, fps=12, stride=8,
+                      dpi=76):
+    """Animate the replay against known ground truth.
+
+    Deliberately separate from mcl_offline.render, which is what you get on
+    a real recording: there is no truth to draw there, and no zoom panel
+    worth the space. Here the truth exists, so the interesting questions
+    are answerable -- is the estimate actually right, and is the cloud
+    still alive?
+
+    Three panels, because the overview alone hides both failure modes: at
+    box scale a converged cloud is roughly 1% of the frame and simply
+    disappears, and a filter that has quietly stopped correcting looks
+    identical to one that is working until you plot its error.
+    """
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    from matplotlib.animation import FuncAnimation, PillowWriter
+    from matplotlib.gridspec import GridSpec
+
+    shown = list(range(0, len(frames), stride))
+    true_x = [truth[i + 1][1] for i in range(len(frames))]
+    true_y = [truth[i + 1][2] for i in range(len(frames))]
+
+    mcl_error = [math.hypot(frames[i]['estimate'][0] - true_x[i],
+                            frames[i]['estimate'][1] - true_y[i]) * 100
+                 for i in range(len(frames))]
+    dead_error = [math.hypot(frames[i]['dead_reckoning'][0] - true_x[i],
+                             frames[i]['dead_reckoning'][1] - true_y[i]) * 100
+                  for i in range(len(frames))]
+    elapsed = [frames[i]['timestamp'] - frames[0]['timestamp']
+               for i in range(len(frames))]
+
+    figure = plt.figure(figsize=(11.5, 6.0))
+    grid = GridSpec(2, 2, width_ratios=(1.15, 1.0), figure=figure)
+    overview = figure.add_subplot(grid[:, 0])
+    zoom = figure.add_subplot(grid[0, 1])
+    error_axes = figure.add_subplot(grid[1, 1])
+
+    # ---- overview ----
+    overview.set(xlim=(rect_map.x_min - 0.05, rect_map.x_max + 0.05),
+                 ylim=(rect_map.y_min - 0.05, rect_map.y_max + 0.05),
+                 xlabel='x (m)', ylabel='y (m)')
+    overview.set_aspect('equal')
+    overview.plot([rect_map.x_min, rect_map.x_max, rect_map.x_max,
+                   rect_map.x_min, rect_map.x_min],
+                  [rect_map.y_min, rect_map.y_min, rect_map.y_max,
+                   rect_map.y_max, rect_map.y_min],
+                  color='0.35', linewidth=2)
+    # Whole true path up front, faint: the target the traces are judged by.
+    overview.plot(true_x, true_y, color='0.55', linestyle=':', linewidth=1.2,
+                  label='true path', zorder=1)
+
+    truth_dot, = overview.plot([], [], 'o', color='black', markersize=6,
+                               label='true pose', zorder=6)
+    mcl_trail, = overview.plot([], [], '-', color='tab:red', linewidth=1.4,
+                               alpha=0.75, zorder=4)
+    dead_trail, = overview.plot([], [], '-', color='tab:green', linewidth=1.4,
+                                alpha=0.75, zorder=3)
+    mcl_dot, = overview.plot([], [], 'o', color='tab:red', markersize=7,
+                             label='MCL estimate', zorder=5)
+    dead_dot, = overview.plot([], [], 'o', color='tab:green', markersize=6,
+                              label='dead reckoning', zorder=5)
+    heading_line, = overview.plot([], [], '-', color='tab:red', linewidth=2,
+                                  zorder=5)
+    right_ray, = overview.plot([], [], '-', color='tab:orange', linewidth=1,
+                               alpha=0.7, label='sensor beams', zorder=2)
+    back_ray, = overview.plot([], [], '-', color='tab:orange', linewidth=1,
+                              alpha=0.7, zorder=2)
+    overview.legend(loc='upper left', fontsize=7.5, framealpha=0.9)
+
+    # ---- zoom on the cloud ----
+    ZOOM_M = 0.06
+    zoom.set_aspect('equal')
+    zoom.set_title('particle cloud (+/- 6cm)', fontsize=9)
+    zoom.tick_params(labelsize=7)
+    cloud = zoom.scatter([], [], s=9, alpha=0.35, color='tab:blue',
+                         edgecolors='none')
+    zoom_truth, = zoom.plot([], [], '+', color='black', markersize=11,
+                            markeredgewidth=1.8)
+    zoom_mcl, = zoom.plot([], [], 'o', color='tab:red', markersize=6)
+    # When the filter loses track the cloud leaves this window entirely and
+    # the panel goes blank, which reads as "particles not drawn" rather than
+    # "particles nowhere near the truth". Say which it is.
+    zoom_note = zoom.text(0.5, 0.80, '', transform=zoom.transAxes,
+                          ha='center', va='center', fontsize=9,
+                          color='tab:red')
+
+    # ---- error vs time ----
+    error_axes.set(xlim=(0, elapsed[-1]),
+                   ylim=(0, max(max(dead_error), max(mcl_error)) * 1.1 + 1),
+                   xlabel='t (s)', ylabel='position error (cm)')
+    error_axes.tick_params(labelsize=7)
+    error_axes.yaxis.label.set_size(8)
+    error_axes.xaxis.label.set_size(8)
+    dead_curve, = error_axes.plot([], [], '-', color='tab:green',
+                                  linewidth=1.4, label='dead reckoning')
+    mcl_curve, = error_axes.plot([], [], '-', color='tab:red', linewidth=1.4,
+                                 label='MCL')
+    error_axes.legend(loc='upper left', fontsize=7.5)
+    error_axes.grid(alpha=0.25)
+
+    def draw(position):
+        index = shown[position]
+        frame = frames[index]
+        est_x, est_y, est_theta = frame['estimate']
+        dead_x, dead_y, _ = frame['dead_reckoning']
+        tx, ty = true_x[index], true_y[index]
+
+        truth_dot.set_data([tx], [ty])
+        mcl_dot.set_data([est_x], [est_y])
+        dead_dot.set_data([dead_x], [dead_y])
+        heading_line.set_data([est_x, est_x + 0.09 * math.cos(est_theta)],
+                              [est_y, est_y + 0.09 * math.sin(est_theta)])
+        mcl_trail.set_data([frames[i]['estimate'][0] for i in range(index + 1)],
+                           [frames[i]['estimate'][1] for i in range(index + 1)])
+        dead_trail.set_data(
+            [frames[i]['dead_reckoning'][0] for i in range(index + 1)],
+            [frames[i]['dead_reckoning'][1] for i in range(index + 1)])
+
+        for ray, (angle, offset), measured in zip(
+                (right_ray, back_ray), SENSOR_CONFIGS, frame['measurements']):
+            if measured is None:
+                ray.set_data([], [])
+                continue
+            origin_x = est_x + offset[0] * math.cos(est_theta) - offset[1] * math.sin(est_theta)
+            origin_y = est_y + offset[0] * math.sin(est_theta) + offset[1] * math.cos(est_theta)
+            bearing = est_theta + angle
+            ray.set_data([origin_x, origin_x + measured * math.cos(bearing)],
+                         [origin_y, origin_y + measured * math.sin(bearing)])
+
+        cloud.set_offsets(frame['particles'][:, :2])
+        zoom.set_xlim(tx - ZOOM_M, tx + ZOOM_M)
+        zoom.set_ylim(ty - ZOOM_M, ty + ZOOM_M)
+        zoom_truth.set_data([tx], [ty])
+        zoom_mcl.set_data([est_x], [est_y])
+
+        inside = np.count_nonzero(
+            (np.abs(frame['particles'][:, 0] - tx) <= ZOOM_M)
+            & (np.abs(frame['particles'][:, 1] - ty) <= ZOOM_M))
+        if inside:
+            zoom_note.set_text('')
+        else:
+            zoom_note.set_text(
+                f'entire cloud is off-panel\n'
+                f'{mcl_error[index]:.0f}cm from the true pose')
+
+        mcl_curve.set_data(elapsed[:index + 1], mcl_error[:index + 1])
+        dead_curve.set_data(elapsed[:index + 1], dead_error[:index + 1])
+
+        spread = math.degrees(float(np.std(frame['particles'][:, 2])))
+        figure.suptitle(
+            f't={elapsed[index]:4.1f}s     '
+            f'MCL error {mcl_error[index]:5.1f}cm     '
+            f'dead reckoning {dead_error[index]:5.1f}cm     '
+            f'heading spread {spread:4.2f}deg',
+            fontsize=10.5, family='monospace')
+        return (truth_dot, mcl_dot, dead_dot, heading_line, mcl_trail,
+                dead_trail, right_ray, back_ray, cloud, zoom_truth,
+                zoom_mcl, zoom_note, mcl_curve, dead_curve)
+
+    figure.tight_layout(rect=(0, 0, 1, 0.94))
+    animation = FuncAnimation(figure, draw, frames=len(shown),
+                              interval=1000 // fps, blit=False)
+    # dpi trades legibility against file size; 76 keeps a 60-frame run
+    # under ~1MB while the zoom panel and error curve stay readable.
+    animation.save(str(output), writer=PillowWriter(fps=fps), dpi=dpi)
+    plt.close(figure)
+
+
 def parse_args():
     parser = argparse.ArgumentParser(
         description='Synthetic wander run for validating MCL without hardware.')
@@ -243,6 +414,8 @@ def parse_args():
     parser.add_argument('--stride', type=int, default=8,
                         help='Render every Nth step (default 8).')
     parser.add_argument('--fps', type=int, default=12)
+    parser.add_argument('--dpi', type=int, default=76,
+                        help='Render resolution (default 76).')
     args = parser.parse_args()
     if args.particles < 1:
         parser.error('--particles must be positive')
@@ -250,6 +423,8 @@ def parse_args():
         parser.error('--stride must be positive')
     if args.fps < 1:
         parser.error('--fps must be positive')
+    if args.dpi < 10:
+        parser.error('--dpi must be at least 10')
     if args.rot_floor is not None and args.rot_floor < 0.0:
         parser.error('--rot-floor must be non-negative')
     return args
@@ -290,8 +465,8 @@ def main():
         print_stats(f'{args.particles} particles', stats)
 
         if args.gif:
-            render(frames, default_map(), args.gif,
-                   fps=args.fps, stride=args.stride)
+            render_with_truth(frames, truth, default_map(), args.gif,
+                              fps=args.fps, stride=args.stride, dpi=args.dpi)
             print(f'\nGIF written to {args.gif.resolve()}')
 
 
