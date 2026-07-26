@@ -187,15 +187,17 @@ Payload 格式：
 - [x] Local strict Sphinx build + desktop/mobile visual QA：pinned Sphinx 9.1.0 toolchain 下 `-W --keep-going` 零 warning；1440×900 / 390×844 检查 sidebar、mobile nav、search、公式、架构图、footer license、Prev/Next 均通过，无 horizontal overflow / broken image
 - [ ] External linkcheck：当前 remote `main` 尚无本地 ahead 的 Week 5/6 commits，因此对应 GitHub links 在 push 前返回 404；push 后重新执行 linkcheck
 - [ ] GitHub repo Settings → Pages → Source 切到 GitHub Actions，并在 push 后验证公开 URL：`https://tuomaaa.github.io/XDriveSLAMRover/`
-- [x] Weeks 1-2 combined first draft：mechanical/electrical selection、CubeMX/CMake/CubeProgrammer workflow、PCB lesson、motor/encoder/CAN/PS2 bring-up、power incidents；缺少的 tutorial、code excerpt 和 test data 保留 placeholder
-- [x] Weeks 1-2 media pass：接入 22 张页面图片（rover、layers、parts、SolidWorks、wiring preview）、drive-test MP4 和 full wiring PDF；Fritzing/KiCad source 保留 repo link；当前剩余 16 个明确 placeholder
-- [x] Weeks 1-2 simple-English pass：全文改成 short sentences 和 common words，保留必要 technical terms；平均 9.2 words/sentence，heuristic Flesch-Kincaid Grade 约 4.1
-- [x] Weeks 1-2 clean strict rebuild：Sphinx 9.1.0 + MyST 5.1.0、`-E -W --keep-going` 零 warning；local HTTP page、22 image tags、video、PDF 和全部 24 个 static assets 均返回 200；旧单次事故 claim 和旧 Week 2 sidebar entry 均不再出现
+- [x] Weeks 1-2 combined chapter：完整保留 mechanical/electrical selection、CubeMX/CMake/CubeProgrammer workflow、motor/encoder/CAN/PS2 bring-up 和两次 power incidents；页面不再使用 TODO/placeholder box，未知事故根因仍明确标作 unproven
+- [x] Weeks 1-2 media pass：接入 22 张页面图片（rover、layers、parts、SolidWorks、wiring preview）、drive-test MP4 和 full wiring PDF；Fritzing/KiCad source 保留 repo link
+- [x] Weeks 1-2 PCB lesson 修订：先用 Dupont 验证并 finalize wiring；不要因 right-angle routing、SI/PI、crosstalk 等高级建议而拖延第一版 PCB；wiring 不再变化后直接画板，并在 kinematics 阶段并行等待制造
+- [x] Weeks 1-2 repository reading guide：加入 48 个 repo links，按 `.ioc` → CMake → `main.c` → MCP2515/protocol → monitor/controller tools 给出阅读顺序，并对关键 function 使用 line link 说明读者应观察的 control flow
+- [x] Weeks 1-2 clear-English pass：保留 PWM、encoder、CAN、galvanic isolation、SI/PI、ERC、DRC 等必要术语和完整 reasoning；平均约 14.0 words/sentence，heuristic Flesch-Kincaid Grade 约 7.5
+- [x] Weeks 1-2 clean strict rebuild：Sphinx 9.1.0 + MyST 5.1.0、`-E -W --keep-going` 零 warning；local HTTP page、22 image assets、drive-test video 和 wiring PDF 均返回 200；两个 debugging anchors 与全部关键 source line targets 已复核
 - [x] Week 3 first draft：从 platform invention 转向 concept-focused work；完整覆盖 frame convention、ticks→wheel velocity、CPR、map/sign/scale 分离、inverse/forward kinematics、REP-103 与 $\sqrt{2}$ correction、timestamp、midpoint integration、CAN/ROS boundary 和 debugging trail
 - [x] Week 3 language pass：正文改为 concise English、middle-school vocabulary 和 short sentences；删除重复解释，同时保留公式、实测数字、failure anchors、source links 与 6 个 evidence placeholder
 - [x] Week 3 clean strict rebuild + code smoke test：Sphinx `-E -W --keep-going` 零 warning；local HTTP Week 3 返回 200，6 个 evidence/diagram placeholder；`python ros2_ws/src/odometry.py` 验证 physical-left input 得到 `vy>0` 且 `vx=omega=0`
 - [ ] Weeks 1-3 desktop/mobile visual re-QA：本次 browser runtime 因 Windows `CreateProcessWithLogonW 1385` 无法启动；此前 scaffold 的 layout QA 通过，但合并后的长正文和 Week 3 公式页尚未重新截图检查
-- [ ] Weeks 1-3 review 后补 BOM/clean CAD drawing/power/toolchain/PCB evidence，以及 Week 3 frame/kinematics diagrams、CPR raw data、encoder-map evidence、Euler-vs-midpoint plot 和 ROS odometry capture；之后扩写 Week 4
+- [ ] 收集可公开的 BOM/clean CAD drawing/power/toolchain/PCB evidence 后继续补 Weeks 1-2；Week 3 后续补 frame/kinematics diagrams、CPR raw data、encoder-map evidence、Euler-vs-midpoint plot 和 ROS odometry capture；之后扩写 Week 4
 - **注意**：Week 6 MCL design/plan 在 `main`，实现仍在 `week6-mcl` branch；合并并重新验证前 notes 必须保持 `In progress`
 
 ---
