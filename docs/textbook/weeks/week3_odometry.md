@@ -1,22 +1,22 @@
 # Week 3 - X-Drive Kinematics and Encoder Odometry
 
-:::{admonition} Chapter status: First draft
+:::{admonition} Chapter status: implemented, with validation still in progress
 :class: status status-progress
 
-The main math and code are done. I tested the wheel map, encoder signs, CPR,
-frame direction, and pose update. Week 4 will do longer tests.
+The kinematics, encoder calibration, and pose estimator are implemented. I
+verified the wheel map, encoder signs, CPR, frame direction, and a left-strafe
+smoke test. Longer ground-truth runs, drift measurements, and a complete ROS
+and TF test on the Raspberry Pi are not complete, so this chapter does not
+claim that the final odometry accuracy is known.
 :::
 
-## From building to modeling
+## From a moving rover to a motion estimate
 
-The rover now moves and sends encoder data. The platform build is mostly done.
-From this point on, I focus more on ideas and models.
+Weeks 1-2 ended with a rover that could move and send encoder counts. Week 3
+asks a different question: what do those four counts say about the motion of
+the whole rover?
 
-The main question also changes:
-
-> What does each sensor value mean? How can I use it to estimate motion?
-
-In Week 3, I turn four encoder counts into one rover pose:
+The output I want is a two-dimensional pose:
 
 $$
 \mathbf{x} =
@@ -25,103 +25,151 @@ x & y & \theta
 \end{bmatrix}^{T}.
 $$
 
-This is called dead reckoning. It adds each new motion to the last pose. Small
-errors also get added. They grow over time.
+Encoder odometry is a form of dead reckoning. Each new wheel motion is added
+to the previous pose. This makes the estimate simple and useful, but it also
+means that wheel slip, scale errors, and heading errors accumulate instead of
+disappearing.
 
-## What I need to solve
+The conversion path is:
 
-The full path is:
+1. Receive four cumulative encoder counts.
+2. Subtract the previous counts.
+3. Correct the encoder wiring map and count directions.
+4. Convert tick changes into wheel velocities.
+5. Use X-drive forward kinematics to find body velocity.
+6. Rotate that motion into the `odom` frame.
+7. Integrate it into the next pose.
 
-1. Read four encoder counts.
-2. Find how much each count changed.
-3. Convert each change into wheel speed.
-4. Find the rover's forward, side, and turn speed.
-5. Add this motion to the last pose.
+The equations were not the most difficult part. Most of my debugging time went
+into deciding which physical wheel each number represented, which direction
+was positive, and which coordinate convention the controller was using.
 
-Before doing the math, I must know three things:
+## How to read the repository
 
-- Which encoder belongs to each wheel?
-- Which count direction is positive?
-- How many counts equal one wheel turn?
+Follow the data from the STM32 to the final ROS message. Reading the files in
+this order makes the boundaries between wiring, protocol, mathematics, and ROS
+clear.
 
-## Set the coordinate frame
+| Order | File | What to read |
+| ---: | --- | --- |
+| 1 | [main.c motor order](https://github.com/Tuomaaa/XDriveSLAMRover/blob/main/stm32/Core/Src/main.c#L58) | Start with `MotorPosition`, then read the two encoder CAN frames. This is the motor-side order, not proof of the physical encoder harness. |
+| 2 | [protocol.py decoder](https://github.com/Tuomaaa/XDriveSLAMRover/blob/main/ros2_ws/src/protocol.py#L72) | See how CAN `0x200` and `0x201` become two pairs of signed 32-bit cumulative counts. |
+| 3 | [encoder_monitor.py main loop](https://github.com/Tuomaaa/XDriveSLAMRover/blob/main/ros2_ws/src/encoder_monitor.py#L33) | Read the baseline and delta logic. During mapping, turn one wheel at a time and treat the four columns as observed channels rather than trusting a wheel name in advance. |
+| 4 | [odometry.py configuration](https://github.com/Tuomaaa/XDriveSLAMRover/blob/main/ros2_ws/src/odometry.py#L27) | Read the geometry, translation scale, CPR, `MOTOR_MAP`, and `ENCODER_SIGN` before reading the equations. |
+| 5 | [OdometryEstimator.update()](https://github.com/Tuomaaa/XDriveSLAMRover/blob/main/ros2_ws/src/odometry.py#L114) | Follow one update from tick subtraction through kinematics and midpoint integration. |
+| 6 | [can_bridge_node.py encoder path](https://github.com/Tuomaaa/XDriveSLAMRover/blob/main/ros2_ws/src/can_bridge_node.py#L106) | See how the bridge collects both frames, calls the estimator, publishes `odom`, and broadcasts TF. |
+| 7 | [PS2_Drive_Test.py inverse kinematics](https://github.com/Tuomaaa/XDriveSLAMRover/blob/main/ros2_ws/src/PS2_Drive_Test.py#L120) | Read this last. It explains the command convention that the forward kinematics must invert. |
 
-I use the ROS REP-103 frame:
+Inside `odometry.py`, the fastest reading order is:
 
-- $+x$ is forward.
-- $+y$ is left.
-- $+z$ is up.
-- Positive $\theta$ is a counter-clockwise turn.
+1. [Physical and calibration constants](https://github.com/Tuomaaa/XDriveSLAMRover/blob/main/ros2_ws/src/odometry.py#L27)
+2. [Encoder harness map](https://github.com/Tuomaaa/XDriveSLAMRover/blob/main/ros2_ws/src/odometry.py#L46)
+3. [Encoder sign correction](https://github.com/Tuomaaa/XDriveSLAMRover/blob/main/ros2_ws/src/odometry.py#L69)
+4. [Tick-to-wheel conversion](https://github.com/Tuomaaa/XDriveSLAMRover/blob/main/ros2_ws/src/odometry.py#L90)
+5. [Forward kinematics](https://github.com/Tuomaaa/XDriveSLAMRover/blob/main/ros2_ws/src/odometry.py#L139)
+6. [Midpoint pose integration](https://github.com/Tuomaaa/XDriveSLAMRover/blob/main/ros2_ws/src/odometry.py#L164)
+7. [Standalone smoke test](https://github.com/Tuomaaa/XDriveSLAMRover/blob/main/ros2_ws/src/odometry.py#L185)
 
-The wheel names are:
+This order keeps a wiring correction from looking like part of the kinematic
+equation.
 
-- $fl$: front-left
-- $fr$: front-right
-- $rl$: rear-left
-- $rr$: rear-right
+## Define one coordinate frame first
 
-The wheel radius is
+I use the ROS REP-103 convention:
+
+- $+x$ points forward.
+- $+y$ points left.
+- $+z$ points upward.
+- Positive $\theta$ is counter-clockwise when viewed from above.
+
+The wheel names are `fl`, `fr`, `rl`, and `rr`. They mean front-left,
+front-right, rear-left, and rear-right.
+
+The measured geometry used by the estimator is:
 
 $$
-r = 0.025\ \mathrm{m}.
+r = 0.025\ \mathrm{m},
+\qquad
+R = 0.115\ \mathrm{m},
 $$
 
-The distance from the rover center to a wheel is
+where $r$ is wheel radius and $R$ is the distance from the rover center to a
+wheel contact point.
 
-$$
-R = 0.115\ \mathrm{m}.
-$$
+The two rear channels show why position names and numeric indexes must be kept
+separate:
 
-I write these rules down first. A formula can be correct but still use the
-wrong direction.
+| Physical wheel | Motor command index | Encoder channel index |
+| --- | ---: | ---: |
+| Front-left | 0 | 0 |
+| Front-right | 1 | 1 |
+| Rear-left | 2 | 3 |
+| Rear-right | 3 | 2 |
 
-:::{admonition} Diagram placeholder - frame and wheels
-:class: asset-placeholder
+The motor indexes follow the intended drive wiring. The encoder indexes follow
+the harness that was actually built. Both tables are true at the same time.
 
-Add a top view of the rover. Show front, $x$, $y$, positive $\theta$, all four
-wheel names, roller angles, $r$, and $R$.
-:::
+## Why the STM32 sends cumulative counts
 
-## Turn encoder ticks into wheel speed
+The STM32 extends the encoder timers into cumulative 32-bit counts and sends
+them in two CAN frames:
 
-An encoder gives a count. It does not give speed.
+- `0x200`: channels 0 and 1
+- `0x201`: channels 2 and 3
 
-The STM32 sends a running total. This is called a cumulative count. For wheel
-$i$, I first find the change:
+The frame construction is visible in
+[main.c](https://github.com/Tuomaaa/XDriveSLAMRover/blob/main/stm32/Core/Src/main.c#L364).
+The Python decoder for the same payload is in
+[protocol.py](https://github.com/Tuomaaa/XDriveSLAMRover/blob/main/ros2_ws/src/protocol.py#L72).
+These two files should be read together whenever the CAN layout changes.
+
+For wheel $i$, the estimator calculates:
 
 $$
 \Delta N_i = N_{i,k} - N_{i,k-1}.
 $$
 
-I also find the time change:
+Cumulative counts are useful because one lost CAN frame does not permanently
+lose its motion. The next received total still includes the missing interval.
+With per-frame deltas, that motion would be gone.
 
-$$
-\Delta t = t_k - t_{k-1}.
-$$
+The first sample cannot produce a delta, so `update()` stores it as a baseline
+and returns no pose result. It also rejects duplicate or out-of-order
+timestamps instead of dividing by zero or integrating backward.
 
-Let $C$ be the counts for one output-shaft turn. The wheel speed is
+## Convert ticks into wheel velocity
+
+Let $C$ be encoder counts per output-shaft revolution. For a measured time gap
+$\Delta t$, the wheel-surface velocity is:
 
 $$
 u_i =
 \frac{2\pi r\Delta N_i}{C\Delta t}.
 $$
 
-This code is in
-[`ticks_to_wheel_velocity()`](https://github.com/Tuomaaa/XDriveSLAMRover/blob/main/ros2_ws/src/odometry.py).
+The implementation is
+[ticks_to_wheel_velocity()](https://github.com/Tuomaaa/XDriveSLAMRover/blob/main/ros2_ws/src/odometry.py#L90).
 
-### Why I send a running total
+The STM32 sends encoder frames near 50 Hz, but Linux and CAN timing do not make
+every gap exactly 20 ms. The estimator therefore uses the actual CAN receive
+timestamps:
 
-A CAN frame can be lost. A running total helps with this problem.
+$$
+\Delta t = t_k - t_{k-1}.
+$$
 
-If one frame is lost, the next count still includes that motion. A per-frame
-change would lose it forever.
+This prevents scheduling jitter from being treated as a change in wheel
+speed. The bridge waits until frame `0x201` completes the four-channel set,
+then calls the estimator with that frame's timestamp. Read that handoff in
+[can_bridge_node.py](https://github.com/Tuomaaa/XDriveSLAMRover/blob/main/ros2_ws/src/can_bridge_node.py#L120).
 
-The first update only saves a start value. Two values are needed to find a
-change.
+This pairing is intentionally simple. There is no sequence number, so a rare
+lost or reordered half-pair can still combine counts from different instants.
+Cumulative counts reduce the damage, but they do not make the pairing perfect.
 
 ## Measure the real CPR
 
-The motor label gives a theoretical value:
+The theoretical encoder value is:
 
 $$
 C_{theory}
@@ -133,9 +181,11 @@ C_{theory}
 2800.
 $$
 
-I did not trust this value. I turned each output shaft ten times by hand.
+The factor of four comes from quadrature decoding. I did not assume that the
+motor encoder and gearbox matched their nominal values exactly, so I turned
+each output shaft ten revolutions by hand and divided the count change by ten.
 
-| Wheel | Counts per turn |
+| Wheel | Measured counts per output turn |
 | --- | ---: |
 | Front-left | 2779.5 |
 | Front-right | 2778.3 |
@@ -143,121 +193,119 @@ I did not trust this value. I turned each output shaft ten times by hand.
 | Rear-right | 2777.6 |
 | Mean | 2778.5 |
 
-I use
+I rounded the shared odometry value to:
 
 $$
 C = 2779.
 $$
 
-The real value is about 0.8% lower than 2800. The four wheels are very close to
-each other. One shared value is good enough for this stage.
+The mean is about 0.8% below the theoretical value, while the spread between
+wheels is only about 0.07%. One shared CPR is reasonable for this stage.
 
-The old PID code on the STM32 still uses 2800. PID is now off. Raw CAN counts
-are not changed by this value. I will update it before I turn PID on again.
+These values came from the manual ten-turn test. The compact raw trial log and
+shaft-mark photos were not preserved as a publishable artifact, so the table
+should not be treated as a full calibration dataset. A careful reproduction
+should mark the shaft, record the start and end count for every trial, repeat
+the measurement, and keep that raw table in the repository.
 
-:::{admonition} Evidence placeholder - CPR test
-:class: asset-placeholder
+The STM32 PID branch still contains `ENCODER_CPR = 2800`, while odometry uses
+2779. This does not change the raw counts sent over CAN. PID is currently
+disabled, and its constant must be reviewed before closed-loop control is used
+again.
 
-Add the shaft marks, raw counts, test steps, repeat trials, date, and firmware
-commit.
-:::
+## Keep map, sign, frame, and scale separate
 
-## Keep map, sign, and scale separate
+I treat four calibration questions as separate variables:
 
-These are three different problems:
+1. **Map:** Which physical wheel produced each channel?
+2. **Sign:** Does forward wheel motion increase or decrease the raw count?
+3. **Frame:** Do the final $v_y$ and $\omega$ directions follow REP-103?
+4. **Scale:** How much physical motion does one tick represent?
 
-1. **Map:** Which wheel made this count?
-2. **Sign:** Does forward motion make the count go up or down?
-3. **Scale:** How far does one count move the wheel?
-
-One setting should not hide an error in another setting.
-
-### The motor map
-
-The motor output order is:
-
-| Motor index | Wheel | Timer |
-| ---: | --- | --- |
-| 0 | Front-left | TIM2 |
-| 1 | Front-right | TIM3 |
-| 2 | Rear-left | TIM4 |
-| 3 | Rear-right | TIM5 |
-
-But the rear encoder wires are swapped. The odometry map is:
-
-| Encoder index | Real wheel | Sign |
-| ---: | --- | ---: |
-| 0 | Front-left | -1 |
-| 1 | Front-right | -1 |
-| 2 | Rear-right | -1 |
-| 3 | Rear-left | -1 |
-
-The code keeps this map in `MOTOR_MAP`. Motor wires and encoder wires are two
-different harnesses. Their maps do not need to look the same.
+Changing one of these values to hide another problem makes later debugging
+much harder. For example, an encoder sign can fix one reversed wheel, but it
+should not be used to repair a left-right coordinate-frame mirror.
 
 (encoder-map-failure)=
-### Failure: the rear encoders were swapped
+### Failure: the rear encoder channels were swapped
 
-The first test gave a clear pattern:
+My first motion test had a specific pattern:
 
-- Forward motion changed $x$.
-- Side motion looked like a turn.
-- A turn looked like side motion.
+- Forward motion changed $x$ as expected.
+- Sideways motion appeared as rotation.
+- Rotation appeared as sideways motion.
 
-This did not look like one bad sign. It looked like two wheel names were
-swapped.
+If only one sign were wrong, the channels would mix in a less symmetric way.
+The clean exchange between $v_y$ and $\omega$ suggested that two wheel
+positions were swapped.
 
-I ran:
+I ran the encoder monitor:
 
 ```console
 cd ros2_ws/src
 sudo python3 encoder_monitor.py
 ```
 
-I turned one wheel at a time. Index 2 was on the rear-right wheel. Index 3 was
-on the rear-left wheel.
+Then I turned one physical wheel at a time and watched which column changed.
+Encoder channel 2 was connected to the rear-right wheel, while channel 3 was
+connected to the rear-left wheel.
 
-I fixed the labels in `MOTOR_MAP`. I did not change the firmware.
+The correction belongs in
+[`MOTOR_MAP`](https://github.com/Tuomaaa/XDriveSLAMRover/blob/main/ros2_ws/src/odometry.py#L62):
 
-:::{admonition} Evidence placeholder - encoder map
-:class: asset-placeholder
+```python
+MOTOR_MAP = {
+    0: "fl",
+    1: "fr",
+    2: "rr",
+    3: "rl",
+}
+```
 
-Add the connector photos, raw monitor output, and the one-wheel test table.
-:::
+I did not change the firmware because the motor harness and encoder harness
+are independent. The STM32 motor enum still describes the command wiring. The
+Python map describes where the feedback wires actually landed.
 
-### The encoder signs
+## Calibrate encoder signs with one simple motion
 
-I then drove straight forward. All four wheels should give positive forward
-motion. All four raw counts went down.
-
-So I use:
+After mapping the channels, I drove straight forward. All four physical wheel
+velocities should be positive for that command, but all four raw encoder totals
+decreased. The measured correction is therefore:
 
 ```python
 ENCODER_SIGN = {0: -1, 1: -1, 2: -1, 3: -1}
 ```
 
-After this test, I do not change the signs to fix side motion or turning. Those
-errors must come from the frame or the wheel math.
+This forward test fully determines the four signs. Once all four channels read
+positive during physical forward motion, I do not change those signs to repair
+sideways or rotational behavior. A remaining error must be in the wheel map,
+frame convention, or equations.
 
 (pid-runaway)=
-### Failure: the wrong sign caused PID runaway
+### Failure: reversed feedback caused PID runaway
 
-The same sign error broke the PID loop. A positive motor command gave a
-negative speed value. PID saw a large error and added more power. The measured
-error then became even larger.
+The same raw sign problem once turned the speed controller into positive
+feedback. A positive command produced a negative measured speed, so PID saw a
+large error and increased the output. The encoder value then moved farther in
+the wrong direction, which made the controller add even more power.
 
-The motors went to full speed. The controller had no useful effect.
+The result was full motor speed with almost no useful controller response.
 
-The firmware now flips all four signs inside the PID path. PID is still off.
-I will test it again before future use.
+The retained PID branch now applies the four `ENC_SIGN` corrections before
+calculating speed. Read the sign application and safety gate in
+[main.c](https://github.com/Tuomaaa/XDriveSLAMRover/blob/main/stm32/Core/Src/main.c#L332).
+`USE_PID` remains `0`, so this branch has not been revalidated on the current
+hardware.
 
-Always test encoder feedback with the rover lifted. Start with low power.
+The practical test rule is simple: lift the rover, begin with low output, and
+confirm that a positive command produces positive measured feedback before
+enabling closed-loop control.
 
-## Inverse kinematics
+## Separate the physical model from the controller units
 
-Inverse kinematics turns rover motion into four wheel commands.
-
-The drive program uses:
+For a physical X-drive model, body velocity can be written as wheel-surface
+velocity commands with a rotational term proportional to $\omega R$. One
+sign convention is:
 
 $$
 \begin{aligned}
@@ -268,29 +316,26 @@ u_{rr} &= v_x + v_y - \omega R.
 \end{aligned}
 $$
 
-This code is in
-[`PS2_Drive_Test.py`](https://github.com/Tuomaaa/XDriveSLAMRover/blob/main/ros2_ws/src/PS2_Drive_Test.py).
+The manual controller does not work in meters per second and radians per
+second. It first converts joystick positions into normalized values, combines
+them with the same sign pattern, and then scales the four results to motor RPM.
+For that reason,
+[PS2_Drive_Test.py](https://github.com/Tuomaaa/XDriveSLAMRover/blob/main/ros2_ws/src/PS2_Drive_Test.py#L90)
+uses a normalized `omega` term instead of writing `omega * R` directly.
 
-If one command is too large, I scale all four commands together. This keeps the
-same motion direction.
+This distinction matters when reproducing the project. The controller code is
+good for manual direction commands, but it is not a unit-correct `cmd_vel` to
+wheel-RPM conversion. A future autonomous velocity controller should convert
+SI units explicitly and include the rover geometry in that boundary.
 
-These formulas match my rover and my wheel signs. They are not a rule for every
-X-drive. A different build may need different signs.
+The controller also scales all four commands together when any one command
+exceeds the motor limit. This keeps the requested motion direction while
+reducing its magnitude.
 
-The formulas also leave out the 45-degree scale factor. I correct that later.
+## Derive forward kinematics
 
-:::{admonition} Diagram placeholder - wheel commands
-:class: asset-placeholder
-
-Add wheel arrows for forward motion, left motion, and a counter-clockwise turn.
-:::
-
-## Forward kinematics
-
-Forward kinematics does the opposite job. It turns four wheel speeds into rover
-motion.
-
-First, I undo the drive formulas:
+Forward kinematics reverses the wheel combination. Before the final frame and
+scale corrections, the algebraic combinations are:
 
 $$
 \tilde{v}_x =
@@ -307,75 +352,62 @@ $$
 \frac{u_{fl} - u_{fr} + u_{rl} - u_{rr}}{4R}.
 $$
 
-These values still use the drive program's frame and scale.
-
-### Fix the frame and scale
-
-The final code uses:
+The rover then needs two measured corrections:
 
 $$
 v_x = \sqrt{2}\,\tilde{v}_x,
-$$
-
-$$
+\qquad
 v_y = -\sqrt{2}\,\tilde{v}_y,
-$$
-
-$$
+\qquad
 \omega = -\tilde{\omega}.
 $$
 
-The negative signs fix the frame. A real left move first gave negative $v_y$.
-A real counter-clockwise turn first gave negative $\omega$. The full test is
-in {ref}`REP-103 frame mirror <frame-mirror-failure>`.
+The actual implementation is the three-line block in
+[OdometryEstimator.update()](https://github.com/Tuomaaa/XDriveSLAMRover/blob/main/ros2_ws/src/odometry.py#L160).
 
-The $\sqrt{2}$ fixes translation scale. Early tests gave about 0.74 m of
-odometry for 1 m of real motion. This is close to $1/\sqrt{2}$. Rotation did
-not have the same error. The full test is in
-{ref}`missing 45-degree projection <translation-scale-failure>`.
+### Why lateral motion and rotation are negated
 
-Do not copy this $\sqrt{2}$ fix without testing your own rover. It belongs to
-my wheel setup and my drive formulas.
+After the rear-channel map was fixed, physical left motion produced negative
+$v_y$, and a physical counter-clockwise turn produced negative $\omega$.
+Forward $v_x$ was already correct.
 
-## The update steps
+That pattern means the remaining problem is a left-right frame mirror, not a
+free encoder sign. Negating $v_y$ and $\omega$ at the forward-kinematics output
+aligns odometry with REP-103 while leaving the already-correct $v_x$ alone.
+The detailed debugging record is in
+{ref}`REP-103 frame mirror <frame-mirror-failure>`.
 
-Each call to `OdometryEstimator.update()` does this:
+### Why translation is multiplied by $\sqrt{2}$
 
-1. Read four running counts.
-2. Subtract the last counts.
-3. Apply `ENCODER_SIGN`.
-4. Apply `MOTOR_MAP`.
-5. Convert ticks to wheel speed.
-6. Run forward kinematics.
-7. Fix the frame and scale.
-8. Add the motion to the pose.
+The controller and the first forward-kinematics implementation used an
+unnormalized 45-degree wheel convention. In the early ground-truth trials,
+forward and sideways odometry measured about 0.74 times the tape-measured
+translation, while in-place rotation remained near the correct scale.
 
-The order is important. A scale value cannot fix a wrong wheel map.
+That pattern is close to the missing projection
+$\cos(45^\circ)=1/\sqrt{2}$. Multiplying only the two translation terms by
+$\sqrt{2}$ corrects that convention without changing rotation.
 
-## Use the real time gap
+The measurements are stored in
+[data/Week4 Trials.xlsx](https://github.com/Tuomaaa/XDriveSLAMRover/blob/main/data/Week4%20Trials.xlsx).
+They are early tests, not a final accuracy result: translation was measured on
+foam, and the actual rotation angles were estimated by eye. The evidence is
+strong enough to identify the missing projection factor, but not strong enough
+to claim precise long-run odometry performance. See
+{ref}`missing 45-degree projection <translation-scale-failure>` for the full
+failure trail.
 
-The STM32 sends data near 50 Hz. The time gap should be near 20 ms. It is not
-always exact.
+This $\sqrt{2}$ correction belongs to the conventions used by this rover. It
+should not be copied into another X-drive implementation without deriving its
+wheel equations and checking real motion.
 
-I use the CAN receive times:
+## Integrate body motion into the world frame
 
-$$
-\Delta t = t_k - t_{k-1}.
-$$
+The kinematic equations produce velocity in the rover's body frame. The pose
+is stored in the world-fixed `odom` frame, so each body displacement must be
+rotated by the rover heading.
 
-This lowers error from CAN delay and Linux timing.
-
-The counts come in CAN frames `0x200` and `0x201`. The bridge updates the
-pose after it gets the second frame. A lost first frame can still make one bad
-pair. The running counts make the error small, so I did not add a frame number
-at this stage.
-
-## Update the pose
-
-Wheel math gives speed in the rover frame. Pose lives in the world `odom`
-frame. I must rotate the motion by the rover angle.
-
-I use the angle in the middle of the time step:
+I use the heading at the middle of the time interval:
 
 $$
 \theta_{mid}
@@ -383,7 +415,7 @@ $$
 \theta_k + \frac{\omega\Delta t}{2}.
 $$
 
-Then:
+The pose update is:
 
 $$
 \begin{aligned}
@@ -403,121 +435,142 @@ y_k
 \end{aligned}
 $$
 
-This is the midpoint method. It is a small step up from plain Euler. It works
-better when the rover moves and turns at the same time.
+Midpoint integration uses the average heading during the step instead of the
+heading only at its beginning. The difference is small at 50 Hz, but it is
+more accurate when the rover translates and rotates at the same time. The code
+also wraps $\theta$ into $(-\pi,\pi]$ so logs remain readable.
 
-I keep $\theta$ between $-\pi$ and $\pi$.
+Read the complete integration block in
+[odometry.py](https://github.com/Tuomaaa/XDriveSLAMRover/blob/main/ros2_ws/src/odometry.py#L164).
+I verified its current sign convention with the standalone left-strafe smoke
+test, but I have not published a measured Euler-versus-midpoint path comparison.
 
-:::{admonition} Plot placeholder - pose update
-:class: asset-placeholder
+## Keep the estimator independent of ROS
 
-Add one simple plot that compares Euler, midpoint, and a true circle.
-:::
-
-## Keep the math separate from ROS
-
-`OdometryEstimator` only needs counts and time. It returns:
+`OdometryEstimator` accepts a dictionary of four cumulative counts and one
+timestamp. It returns plain numbers:
 
 ```text
 (x, y, theta, vx, vy, omega)
 ```
 
-It does not know about CAN or ROS. I can test the math on a laptop.
+It does not import CAN or ROS libraries. This lets me run the mathematical
+smoke test on a laptop with:
 
-[`can_bridge_node.py`](https://github.com/Tuomaaa/XDriveSLAMRover/blob/main/ros2_ws/src/can_bridge_node.py)
-handles ROS. It publishes `nav_msgs/Odometry` on `odom`. It also sends the
-`odom -> base_link` transform.
+```console
+python ros2_ws/src/odometry.py
+```
 
-The code exists. The full ROS test on the real Pi is still not done.
+The ROS boundary belongs to `can_bridge_node.py`. The node:
 
-:::{admonition} Evidence placeholder - ROS output
-:class: asset-placeholder
+1. decodes `0x200` and `0x201`;
+2. waits until all four cumulative counts are available;
+3. calls `OdometryEstimator.update()`;
+4. publishes `nav_msgs/Odometry` on `odom`;
+5. broadcasts `odom -> base_link`;
+6. prints a reduced-rate pose log for ground-truth work.
 
-Add `ros2 topic echo /odom`, topic rate, TF tree, launch commands, and an RViz
-path.
-:::
+Read the estimator handoff in
+[can_bridge_node.py](https://github.com/Tuomaaa/XDriveSLAMRover/blob/main/ros2_ws/src/can_bridge_node.py#L182),
+then read the
+[`Odometry` and TF publication](https://github.com/Tuomaaa/XDriveSLAMRover/blob/main/ros2_ws/src/can_bridge_node.py#L197).
 
-## Test one motion at a time
+The publication code exists, but a complete Raspberry Pi record containing
+`ros2 topic echo`, topic rate, TF tree, and RViz path has not been captured.
+That remains an unverified integration boundary rather than a completed result.
 
-The code has a left-move smoke test. It checks:
+## Test one degree of freedom at a time
+
+The standalone smoke test creates a physical left-strafe wheel pattern and
+checks:
 
 $$
-v_x = 0, \qquad \omega = 0, \qquad v_y > 0.
+v_x = 0,
+\qquad
+\omega = 0,
+\qquad
+v_y > 0.
 $$
 
-For the real rover, I use this order:
+For hardware testing, I use a fixed order because each motion isolates a
+different class of mistake:
 
-1. Turn one wheel by hand.
-2. Drive forward.
-3. Move left.
-4. Turn counter-clockwise.
-5. Measure distance and angle.
+1. Turn one wheel by hand to identify its encoder channel.
+2. Drive forward to fix all four encoder signs.
+3. Move left to verify the lateral frame direction.
+4. Turn counter-clockwise to verify angular direction.
+5. Measure translation and rotation to check scale.
+6. Only then run longer paths and drift tests.
 
-The error pattern often points to the cause:
+The observed error pattern is often more useful than the size of the error:
 
-| What I see | What I check first |
+| Observation | First item to inspect |
 | --- | --- |
-| One wheel has the wrong sign | Encoder sign |
-| Side motion and turning swap | Wheel map |
-| Left and turn are both reversed | Frame direction |
-| Both move axes have one scale error | CPR or 45-degree scale |
-| Only turn scale is wrong | $R$ |
-| Results change with the floor | Wheel slip |
+| One channel has the wrong direction | That encoder sign |
+| Sideways motion and rotation exchange roles | Wheel-to-channel map |
+| Left and counter-clockwise are both reversed, but forward is correct | Coordinate-frame mirror |
+| Forward and sideways share one scale error | CPR or 45-degree projection |
+| Only angular scale is wrong | Center-to-wheel distance $R$ |
+| Results change strongly with the surface | Wheel slip and contact conditions |
 
 (heartbeat-overwrite)=
-### Failure: heartbeat stop did not stay on
+### Failure: the heartbeat stop was overwritten
 
-The first timeout called `motors_stop()`. The next control update turned PWM
-on again.
+The first timeout logic called `motors_stop()`, but the normal 20 ms control
+block ran immediately afterward and wrote a nonzero PWM value again. The stop
+command was correct for only a moment.
 
-The fix blocks the full motor update when the heartbeat is missing. PWM stays
-at zero. PID memory is also cleared.
+The fix calculates `hb_ok` and uses it to gate the full control update. When
+the heartbeat is missing, PWM stays at zero; the PID branch also clears its
+stored error to prevent windup. Encoder accumulation continues so timer wraps
+are still handled correctly.
 
-I test this with the rover lifted before any floor test.
+Read the actual gate before trusting this description:
+[main.c heartbeat handling](https://github.com/Tuomaaa/XDriveSLAMRover/blob/main/stm32/Core/Src/main.c#L308).
+This safety behavior should always be tested with the rover lifted before a
+floor run.
 
-## Week 3 result
+## What Week 3 established
 
-The model now uses:
+The estimator now uses:
 
-- Map: `{0: fl, 1: fr, 2: rr, 3: rl}`
-- Sign: $-1$ for all four encoders
-- CPR: 2779
-- Wheel radius: 0.025 m
-- Center-to-wheel distance: 0.115 m
-- Frame: forward $+x$, left $+y$, CCW $+\theta$
-- Move scale: $\sqrt{2}$
-- Time: real CAN receive time
-- Pose update: midpoint method
+| Setting | Current value | Evidence state |
+| --- | --- | --- |
+| Encoder map | `{0: fl, 1: fr, 2: rr, 3: rl}` | One-wheel hand test on the real harness |
+| Encoder sign | `-1` for all four channels | Physical forward-motion test |
+| Encoder CPR | 2779 | Four ten-turn manual measurements |
+| Wheel radius | 0.025 m | Physical geometry |
+| Center-to-wheel distance | 0.115 m | Physical geometry |
+| Output frame | forward $+x$, left $+y$, CCW $+\theta$ | Direction tests aligned to REP-103 |
+| Translation scale | $\sqrt{2}$ | Early foam ground-truth pattern |
+| Time step | CAN receive timestamp difference | Implemented in the estimator boundary |
+| Pose integration | Midpoint method | Code and standalone smoke test |
 
-This gives one clear pose estimate. It is not perfect. Wheels slip. Motors are
-not equal. The floor changes the result. Small errors grow over time.
+This produces one consistent pose estimate. It does not remove wheel slip,
+unequal motor response, floor effects, or accumulated heading error. Week 4
+measures those effects instead of treating odometry as exact.
 
-Week 4 measures these errors.
+## Reproduction procedure
 
-## Reproduction checklist
+1. Write down the body frame and physical wheel names before changing code.
+2. Record motor command order separately from encoder feedback order.
+3. Turn each wheel by hand and map every observed encoder channel.
+4. Drive one simple forward command and determine every encoder sign.
+5. Measure CPR over several output-shaft turns and keep the raw counts.
+6. Measure wheel radius $r$ and center-to-wheel distance $R$ on the built rover.
+7. Derive forward kinematics from the same convention used by the drive code.
+8. Verify forward, left, and counter-clockwise motion separately.
+9. Run the standalone estimator smoke test before adding CAN or ROS.
+10. Verify `odom`, topic rate, and `odom -> base_link` on the Raspberry Pi.
+11. Measure drift on the actual test surface before using odometry in localization.
 
-- [ ] Draw the frame and wheel directions.
-- [ ] Find each encoder index by hand.
-- [ ] Test every encoder sign.
-- [ ] Measure CPR.
-- [ ] Measure $r$ and $R$.
-- [ ] Test forward, left, and turn motion.
-- [ ] Keep map, sign, scale, and frame settings separate.
-- [ ] Test `odom` and `odom -> base_link` on the Pi.
-- [ ] Measure drift in Week 4.
+## Source index
 
-## Source files
-
-- [`odometry.py`](https://github.com/Tuomaaa/XDriveSLAMRover/blob/main/ros2_ws/src/odometry.py)
-- [`encoder_monitor.py`](https://github.com/Tuomaaa/XDriveSLAMRover/blob/main/ros2_ws/src/encoder_monitor.py)
-- [`PS2_Drive_Test.py`](https://github.com/Tuomaaa/XDriveSLAMRover/blob/main/ros2_ws/src/PS2_Drive_Test.py)
-- [`can_bridge_node.py`](https://github.com/Tuomaaa/XDriveSLAMRover/blob/main/ros2_ws/src/can_bridge_node.py)
-- [`main.c`](https://github.com/Tuomaaa/XDriveSLAMRover/blob/main/stm32/Core/Src/main.c)
-
-## Verification state
-
-CPR, signs, wheel map, frame direction, move scale, and midpoint code are done.
-The left-move smoke test passes.
-
-Long tests, drift data, floor tests, and the full ROS test are not done here.
-They belong to Week 4 or later.
+- [Odometry configuration, kinematics, integration, and smoke test](https://github.com/Tuomaaa/XDriveSLAMRover/blob/main/ros2_ws/src/odometry.py)
+- [Raw encoder monitoring tool](https://github.com/Tuomaaa/XDriveSLAMRover/blob/main/ros2_ws/src/encoder_monitor.py)
+- [Normalized PS2 X-drive command path](https://github.com/Tuomaaa/XDriveSLAMRover/blob/main/ros2_ws/src/PS2_Drive_Test.py)
+- [CAN-to-odometry ROS boundary](https://github.com/Tuomaaa/XDriveSLAMRover/blob/main/ros2_ws/src/can_bridge_node.py)
+- [CAN payload decoder](https://github.com/Tuomaaa/XDriveSLAMRover/blob/main/ros2_ws/src/protocol.py)
+- [STM32 motor order, encoder frames, PID sign, and heartbeat gate](https://github.com/Tuomaaa/XDriveSLAMRover/blob/main/stm32/Core/Src/main.c)
+- [Early ground-truth measurements](https://github.com/Tuomaaa/XDriveSLAMRover/blob/main/data/Week4%20Trials.xlsx)
+- [Project decisions and unresolved validation work](https://github.com/Tuomaaa/XDriveSLAMRover/blob/main/PROJECT_STATE.md)
