@@ -96,6 +96,20 @@ $$
 where $r$ is wheel radius and $R$ is the distance from the rover center to a
 wheel contact point.
 
+The corresponding configuration is kept together near the top of
+[`odometry.py`](https://github.com/Tuomaaa/XDriveSLAMRover/blob/main/ros2_ws/src/odometry.py#L27):
+
+```python
+WHEEL_RADIUS_M = 0.025
+CENTER_TO_WHEEL_M = 0.115
+TRANSLATION_SCALE = math.sqrt(2)
+ENCODER_CPR = 2779
+```
+
+Keeping these values outside the estimator makes it clear which numbers come
+from the physical rover or calibration. A change to the chassis should update
+this block, not be hidden inside the kinematic equations.
+
 The two rear channels show why position names and numeric indexes must be kept
 separate:
 
@@ -150,6 +164,19 @@ $$
 The implementation is
 [ticks_to_wheel_velocity()](https://github.com/Tuomaaa/XDriveSLAMRover/blob/main/ros2_ws/src/odometry.py#L90).
 
+```python
+def ticks_to_wheel_velocity(delta_ticks: int, dt: float) -> float:
+    if dt <= 0:
+        return 0.0
+    rev_per_sec = (delta_ticks / dt) / ENCODER_CPR
+    return rev_per_sec * 2.0 * math.pi * WHEEL_RADIUS_M
+```
+
+Read the expression from left to right: ticks per second become output-shaft
+revolutions per second, then circumference converts revolutions into meters.
+The `dt <= 0` guard prevents a duplicate or reversed timestamp from producing
+an invalid velocity.
+
 The STM32 sends encoder frames near 50 Hz, but Linux and CAN timing do not make
 every gap exactly 20 ms. The estimator therefore uses the actual CAN receive
 timestamps:
@@ -162,6 +189,19 @@ This prevents scheduling jitter from being treated as a change in wheel
 speed. The bridge waits until frame `0x201` completes the four-channel set,
 then calls the estimator with that frame's timestamp. Read that handoff in
 [can_bridge_node.py](https://github.com/Tuomaaa/XDriveSLAMRover/blob/main/ros2_ws/src/can_bridge_node.py#L120).
+
+```python
+base = result.motor_id * 2
+self._ticks[base] = result.motor_a_ticks
+self._ticks[base + 1] = result.motor_b_ticks
+
+if result.motor_id == 1 and len(self._ticks) == 4:
+    self._on_encoder_complete(msg.timestamp)
+```
+
+`motor_id` is `0` for CAN frame `0x200` and `1` for `0x201`. Multiplying it by
+two places each pair into indexes `0,1` or `2,3`. The estimator runs only when
+the second frame arrives and all four entries exist.
 
 This pairing is intentionally simple. There is no sequence number, so a rare
 lost or reordered half-pair can still combine counts from different instants.
@@ -323,6 +363,25 @@ For that reason,
 [PS2_Drive_Test.py](https://github.com/Tuomaaa/XDriveSLAMRover/blob/main/ros2_ws/src/PS2_Drive_Test.py#L90)
 uses a normalized `omega` term instead of writing `omega * R` directly.
 
+```python
+m0 = (vx + vy + omega) * MAX_RPM
+m1 = (vx - vy - omega) * MAX_RPM
+m2 = (vx - vy + omega) * MAX_RPM
+m3 = (vx + vy - omega) * MAX_RPM
+
+max_val = max(abs(m0), abs(m1), abs(m2), abs(m3), 1)
+if max_val > MAX_RPM:
+    scale = MAX_RPM / max_val
+    m0 *= scale
+    m1 *= scale
+    m2 *= scale
+    m3 *= scale
+```
+
+The first four lines create the X-drive sign pattern. The second block applies
+one shared scale factor, so saturation changes the speed but not the requested
+direction of motion.
+
 This distinction matters when reproducing the project. The controller code is
 good for manual direction commands, but it is not a unit-correct `cmd_vel` to
 wheel-RPM conversion. A future autonomous velocity controller should convert
@@ -364,6 +423,17 @@ $$
 
 The actual implementation is the three-line block in
 [OdometryEstimator.update()](https://github.com/Tuomaaa/XDriveSLAMRover/blob/main/ros2_ws/src/odometry.py#L160).
+
+```python
+vx = (fl + fr + rl + rr) / 4.0 * TRANSLATION_SCALE
+vy = -(fl - fr + rr - rl) / 4.0 * TRANSLATION_SCALE
+omega = -(fl - fr - rr + rl) / (4.0 * CENTER_TO_WHEEL_M)
+```
+
+This is the point where three ideas meet: wheel combination, the measured
+left-right frame correction, and the missing 45-degree translation scale. I
+keep the map and encoder signs earlier in `update()` so these equations only
+operate on named physical wheel velocities.
 
 ### Why lateral motion and rotation are negated
 
@@ -442,6 +512,23 @@ also wraps $\theta$ into $(-\pi,\pi]$ so logs remain readable.
 
 Read the complete integration block in
 [odometry.py](https://github.com/Tuomaaa/XDriveSLAMRover/blob/main/ros2_ws/src/odometry.py#L164).
+
+```python
+theta_mid = self.theta + omega * dt / 2.0
+
+dx = (vx * math.cos(theta_mid) - vy * math.sin(theta_mid)) * dt
+dy = (vx * math.sin(theta_mid) + vy * math.cos(theta_mid)) * dt
+
+self.x += dx
+self.y += dy
+self.theta += omega * dt
+self.theta = math.atan2(math.sin(self.theta), math.cos(self.theta))
+```
+
+The first two expressions rotate body-frame velocity into the world frame.
+The final `atan2` expression wraps the heading without changing its physical
+direction.
+
 I verified its current sign convention with the standalone left-strafe smoke
 test, but I have not published a measured Euler-versus-midpoint path comparison.
 
@@ -469,6 +556,21 @@ The ROS boundary belongs to `can_bridge_node.py`. The node:
 4. publishes `nav_msgs/Odometry` on `odom`;
 5. broadcasts `odom -> base_link`;
 6. prints a reduced-rate pose log for ground-truth work.
+
+The estimator boundary itself is deliberately short:
+
+```python
+result = self._odo.update(dict(self._ticks), timestamp)
+if result is None:
+    return
+
+x, y, theta, vx, vy, omega = result
+self._publish_odom(x, y, theta, vx, vy, omega)
+```
+
+`None` is expected for the first sample and for a rejected timestamp. The ROS
+node does not reproduce any kinematic math; it only moves validated numbers
+into messages and transforms.
 
 Read the estimator handoff in
 [can_bridge_node.py](https://github.com/Tuomaaa/XDriveSLAMRover/blob/main/ros2_ws/src/can_bridge_node.py#L182),
@@ -527,6 +629,28 @@ are still handled correctly.
 
 Read the actual gate before trusting this description:
 [main.c heartbeat handling](https://github.com/Tuomaaa/XDriveSLAMRover/blob/main/stm32/Core/Src/main.c#L308).
+
+```c
+uint8_t hb_ok =
+    (HAL_GetTick() - last_heartbeat <= HEARTBEAT_TIMEOUT_MS);
+if (!hb_ok) {
+  motors_stop();
+}
+
+/* Later, inside the open-loop motor update: */
+if (hb_ok) {
+  int32_t duty = (int32_t)(
+      (float)motors[i].target_rpm * PWM_PERIOD / MAX_RPM);
+  motor_set_pwm(&motors[i], duty);
+} else {
+  motor_set_pwm(&motors[i], 0);
+}
+```
+
+Calling `motors_stop()` remains useful as the immediate response, but the
+second condition is what prevents the regular control loop from turning the
+motors back on.
+
 This safety behavior should always be tested with the rover lifted before a
 floor run.
 

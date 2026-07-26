@@ -196,8 +196,9 @@ Payload 格式：
 - [x] Week 3 process chapter：完整覆盖 frame convention、cumulative ticks、CPR、map/sign/frame/scale 分离、inverse/forward kinematics、REP-103 与 $\sqrt{2}$ correction、CAN timestamp、midpoint integration、CAN/ROS boundary 和全部 debugging trail；正文不再使用 TODO/evidence/diagram placeholder
 - [x] Week 3 unit explanation 修订：区分物理 wheel-velocity 模型中的 `omega*R` 与 `PS2_Drive_Test.py` 的 normalized joystick `omega`；明确当前 manual controller 不是 SI-unit `cmd_vel` → wheel-RPM conversion，避免读者混用两层单位
 - [x] Week 3 repository reading guide：加入 35 个 repo/data links，按 STM32 motor order → CAN decoder → encoder monitor → odometry config/update → ROS publication → controller convention 给出阅读顺序；关键 constant/function 使用有效 line link
+- [x] Week 3 code walkthrough pass：新增 8 组短 snippet（geometry/calibration constants、tick conversion、two-frame CAN pairing、normalized inverse kinematics、forward kinematics、midpoint integration、ROS estimator handoff、heartbeat safety gate），页面共 13 个 code blocks；每段都紧跟公式/故障解释并与对应 repo implementation 对照
 - [x] Week 3 clear-English pass：保留全部 technical terms、公式、实测数字与局限说明；平均约 14.9 words/sentence，heuristic Flesch-Kincaid Grade 约 9.6（technical vocabulary 计入）
-- [x] Week 3 clean strict rebuild + code smoke test：Sphinx `-E -W --keep-going` 零 warning；local HTTP Week 3 返回 200；35 个 local repo targets 与 3 个 debugging anchors 均复核；`python ros2_ws/src/odometry.py` 验证 physical-left input 得到 `vy>0` 且 `vx=omega=0`
+- [x] Week 3 clean strict rebuild + code smoke test：Sphinx `-E -W --keep-going` 零 warning；local HTTP Week 3 返回 200；36 个 local repo targets 与 3 个 debugging anchors 均复核；`python ros2_ws/src/odometry.py` 验证 physical-left input 得到 `vy>0` 且 `vx=omega=0`
 - [ ] Weeks 1-3 desktop/mobile visual re-QA：本次 browser runtime 因 Windows `CreateProcessWithLogonW 1385` 无法启动；此前 scaffold 的 layout QA 通过，但合并后的长正文和 Week 3 公式页尚未重新截图检查
 - [ ] 收集可公开的 BOM/clean CAD drawing/power/toolchain/PCB evidence 后继续补 Weeks 1-2；Week 3 后续补 frame/kinematics diagrams、CPR raw data、encoder-map evidence、Euler-vs-midpoint plot 和 ROS odometry capture；之后扩写 Week 4
 - **注意**：Week 6 MCL design/plan 在 `main`，实现仍在 `week6-mcl` branch；合并并重新验证前 notes 必须保持 `In progress`
