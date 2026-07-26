@@ -26,7 +26,7 @@ myst_enable_extensions = [
 myst_heading_anchors = 4
 
 html_theme = "sphinx_rtd_theme"
-html_title = "SummerSLAM Textbook"
+html_title = "SummerSLAM Engineering Notes"
 html_baseurl = "https://tuomaaa.github.io/XDriveSLAMRover/"
 html_static_path = ["_static"]
 html_css_files = ["custom.css"]

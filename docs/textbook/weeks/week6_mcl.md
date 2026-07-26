@@ -34,7 +34,7 @@ drift inside the measured rectangular map.
 (mcl-design-corrections)=
 ## Design corrections retained for expansion
 
-- The textbook `rot1/trans/rot2` motion decomposition assumes a platform that
+- The standard `rot1/trans/rot2` motion decomposition assumes a platform that
   turns to translate. SummerSLAM instead perturbs body-frame $dx$, $dy$, and
   $d\theta$ so lateral X-drive motion remains representable.
 - A rotational noise floor is needed to maintain particle heading diversity;

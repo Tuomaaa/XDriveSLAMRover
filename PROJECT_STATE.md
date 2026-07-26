@@ -51,28 +51,35 @@ TB6612 #1:
 
 注意：label 和 TB6612 pin 命名有错位（Motor1_1=BIN2, Motor1_2=BIN1），功能不影响但代码里注意对应关系。
 
-### 硬件事故记录 ⚠️ (2026-06-08)
+### 硬件事故记录 ⚠️（两次，root cause 未确认）
 
-**事故原因**：用示波器测量 TB6612 VM (12V) 信号时，探针意外同时碰到 VM 和 VCC pin，导致 12V 灌入 3.3V rail。
+两次 bring-up 期间均发生 destructive short，但目前没有足够证据确认各自的具体短路点和传播路径。旧记录中的“示波器探针桥接 VM/VCC”只能算假设，不能继续写成已确认原因。
 
-**传播路径**：12V → VCC (3.3V rail) → 所有共享 3.3V rail 的模块 → STM32 和 TB6612 #2 内部过压击穿。
-
-**损失清单**：
-- Black Pill (STM32F411CEU6) — **烧毁** ✗ (5V/3.3V/GND 全短路，多个 GPIO 与 GND 短路)
-- TB6612 #2（未直接碰触）— **烧毁** ✗ (VM-GND 短路)
-- ST-Link V2 clone — **烧毁** ✗ (灯不亮，12V 通过 SWD 反灌)
-- TB6612 #1（探针碰的那块）— **存活** ✓ (12V 通过探针外部旁路分流，芯片内部未承受大电压差)
-- MCP2515+TJA1050 模块 — **存活** ✓ (SPI 通信 + loopback 收发验证通过)
-
-**需要补购**：
-- Black Pill STM32F411CEU6 × 2（备一块）
-- TB6612 模块 × 1
+**事故 1 损失**：
 - ST-Link V2 clone × 1
+- STM32 board × 1
+- TB6612 module × 2
+
+**事故 2 损失**：
+- STM32 board × 1
+- TB6612 module × 1
+
+**总损失**：STM32 × 2、TB6612 × 3、ST-Link × 1。Raspberry Pi 因单独处理 power path 保持安全。
+
+**断电后的 quick triage**：
+1. 断开 battery、USB、ST-Link 和所有其他电源
+2. 用 multimeter 检查 GND 与 3.3V/5V/12V rail 之间的 resistance/continuity
+3. 对可疑芯片检查 GPIO 与 GND，但尽量和同型号 good board 对比
+4. 区分 persistent short 与 capacitor charging；蜂鸣不等于板子一定损坏
+5. ST-Link 单独插 USB 不亮是本次观测到的 failure symptom
+6. 之后用 current-limited bench supply 逐模块重新上电
 
 **教训**：
-1. 测量高压侧信号前，先断开高压电源
-2. 高压 (12V) 和低压 (3.3V/5V) 走线物理隔开，不要混在同一排排针上
-3. 探针 GND 夹先夹好，再去碰信号线
+1. continuity test 只能 triage，不能证明 board 完全正常
+2. 12V 与 3.3V/5V wiring 必须物理分开，并在断电后改线
+3. 加 fuse/current limit/keyed connector，逐 power branch、逐 motor channel bring-up
+4. 备 STM32、TB6612、ST-Link 等低成本 spare，避免单次事故中断整个进度
+5. isolated DC-DC 可降低 fault propagation，但若 signal/ground 仍相连就不是完整 galvanic isolation，也不能预防所有 short
 
 ### CAN 协议（已定 ✅）
 
@@ -169,19 +176,25 @@ Payload 格式：
   - 数据: `data/ultrasonic/map_validation.csv`
 - [x] Sensor offset 实测: RIGHT=(-π/2, (0.0, -0.09)m), BACK=(π, (-0.09, 0.0)m)
 
-### Week 1-6 Textbook（骨架完成，待发布 2026-07-26）
+### Week 1-6 Engineering Notes（Weeks 1-3 first drafts，2026-07-26）
 
 - [x] Sphinx + `sphinx_rtd_theme` + MyST Markdown 文档骨架放在 `docs/textbook/`
-- [x] Home、Week 1-6、Reproduction/CAN/Calibration/Debugging appendices 全部接入 `toctree`
+- [x] Home、combined Weeks 1-2、Week 3-6、Reproduction/CAN/Calibration/Debugging appendices 接入 `toctree`；旧 Week 2 URL 保留为 orphan compatibility page
 - [x] 每章分开标注 chapter status 与 engineering verification state，未完成内容不冒充已验证
 - [x] 硬件事故、CAN/firmware 坑、encoder swap、PID runaway、heartbeat 急停覆盖、frame/scale 修正全部建立 cross-reference
 - [x] GitHub Actions workflow：PR 只做 strict build，`main` 文档改动 build + deploy 到 GitHub Pages
-- [x] 原创 code 使用 MIT，原创 textbook content/media 使用 CC BY 4.0，署名 Thomas Pan；第三方 license 保持不变
+- [x] 原创 code 使用 MIT，原创 engineering-note content/media 使用 CC BY 4.0，署名 Thomas Pan；第三方 license 保持不变
 - [x] Local strict Sphinx build + desktop/mobile visual QA：pinned Sphinx 9.1.0 toolchain 下 `-W --keep-going` 零 warning；1440×900 / 390×844 检查 sidebar、mobile nav、search、公式、架构图、footer license、Prev/Next 均通过，无 horizontal overflow / broken image
 - [ ] External linkcheck：当前 remote `main` 尚无本地 ahead 的 Week 5/6 commits，因此对应 GitHub links 在 push 前返回 404；push 后重新执行 linkcheck
 - [ ] GitHub repo Settings → Pages → Source 切到 GitHub Actions，并在 push 后验证公开 URL：`https://tuomaaa.github.io/XDriveSLAMRover/`
-- [ ] 按顺序扩写正文：先 Week 1 Rover Platform and Hardware Bring-up，再 Week 2-6
-- **注意**：Week 6 MCL design/plan 在 `main`，实现仍在 `week6-mcl` branch；合并并重新验证前 textbook 必须保持 `In progress`
+- [x] Weeks 1-2 combined first draft：mechanical/electrical selection、CubeMX/CMake/CubeProgrammer workflow、PCB retrospective、motor/encoder/CAN/PS2 bring-up、power incidents；未提供的图片、tutorial、code excerpt 和数据均保留 placeholder
+- [x] Weeks 1-2 clean strict rebuild：Sphinx 9.1.0 + MyST 5.1.0、`-E -W --keep-going` 零 warning；local HTTP Home/merged/compatibility pages 均 200，20 个 placeholder 已进入生成 HTML，旧单次事故 claim 和旧 Week 2 sidebar entry 均不再出现
+- [x] Week 3 first draft：从 platform invention 转向 concept-focused work；完整覆盖 frame convention、ticks→wheel velocity、CPR、map/sign/scale 分离、inverse/forward kinematics、REP-103 与 $\sqrt{2}$ correction、timestamp、midpoint integration、CAN/ROS boundary 和 debugging trail
+- [x] Week 3 language pass：正文改为 concise English、middle-school vocabulary 和 short sentences；删除重复解释，同时保留公式、实测数字、failure anchors、source links 与 6 个 evidence placeholder
+- [x] Week 3 clean strict rebuild + code smoke test：Sphinx `-E -W --keep-going` 零 warning；local HTTP Week 3 返回 200，6 个 evidence/diagram placeholder；`python ros2_ws/src/odometry.py` 验证 physical-left input 得到 `vy>0` 且 `vx=omega=0`
+- [ ] Weeks 1-3 desktop/mobile visual re-QA：本次 browser runtime 因 Windows `CreateProcessWithLogonW 1385` 无法启动；此前 scaffold 的 layout QA 通过，但合并后的长正文和 Week 3 公式页尚未重新截图检查
+- [ ] Weeks 1-3 review 后补 BOM/CAD/power/toolchain/PCB evidence，以及 Week 3 frame/kinematics diagrams、CPR raw data、encoder-map evidence、Euler-vs-midpoint plot 和 ROS odometry capture；之后扩写 Week 4
+- **注意**：Week 6 MCL design/plan 在 `main`，实现仍在 `week6-mcl` branch；合并并重新验证前 notes 必须保持 `In progress`
 
 ---
 
@@ -234,8 +247,9 @@ Payload 格式：
 | 2026-07-20 | 噪声模型用两传感器合并拟合而非分别建模 | 两传感器 std 趋势几乎一致（per-sensor fit 差异 <0.5mm），分别建模增加参数但不增加 MCL 区分度。合并后 sigma(d) = 0.0017 + 0.0078*d |
 | 2026-07-20 | BeamModel 权重 w_hit=0.94/w_short=0.01/w_max=0.03/w_rand=0.02 | 实测数据非常干净：无 crosstalk、无 multipath 短读数，invalid 率 ~3% 直接映射到 w_max。w_short 保留极小值兜底 |
 | 2026-07-20 | Bias (~2.4mm + 0.47% of distance) 不补偿 | bias 绝对值 <8mm@1m，远小于 MCL 粒子间距（通常几十mm），补偿收益不抵引入的复杂度。如果将来 MCL 精度不够再回来加 |
-| 2026-07-26 | Textbook 用 Sphinx + `sphinx_rtd_theme` + MyST，GitHub Pages 作为 repo 首页 | 复用 PythonRobotics 的 Read the Docs layout，同时继续用 Markdown 写作；首发只展示 Week 1-6，完整建骨架后按周顺序扩写 |
-| 2026-07-26 | Code 用 MIT、textbook content/media 用 CC BY 4.0（Thomas Pan） | 软件与教材复用边界清楚；STM32 HAL、CMSIS 等第三方内容继续服从各自 license，不被 root license 重新授权 |
+| 2026-07-26 | Engineering Notes 用 Sphinx + `sphinx_rtd_theme` + MyST，GitHub Pages 作为 repo 首页 | 复用 PythonRobotics 的 Read the Docs layout，但内容定位为 first-person reproduction/process journal；首发只展示 Week 1-6 |
+| 2026-07-26 | Code 用 MIT、engineering-note content/media 用 CC BY 4.0（Thomas Pan） | 软件与原创内容复用边界清楚；STM32 HAL、CMSIS 等第三方内容继续服从各自 license，不被 root license 重新授权 |
+| 2026-07-26 | Week 1 hardware 与 Week 2 programming 合并成一个 Weeks 1-2 chapter | 实际 bring-up workflow 无法把 hardware verification 和 exercising firmware 分开；旧 Week 2 URL 用 orphan compatibility page 保持稳定，sidebar 不重复展示 |
 
 ---
 
@@ -244,7 +258,7 @@ Payload 格式：
 - **CubeMX TIM3 encoder mode 不写入**：pin SH 配置正确 (Encoder_Interface) 但 `TIM3.EncoderMode` 行不生成，GUI 怎么切都没用。默认值是 TIM_ENCODERMODE_TI1（只单路计数），会导致该轮分辨率只有其他轮的 1/4。Workaround：文本编辑器直接在 .ioc 加 `TIM3.EncoderMode=TIM_ENCODERMODE_TI12` 和 `TIM3.IPParameters=EncoderMode`，再 regenerate。
 - **Encoder Period 默认值是最大值不是 0**：CubeMX GUI 默认就填了 16-bit=65535 / 32-bit=4294967295，.ioc 里没显式写出来只是因为没改过默认值，generate code 用的是 GUI 显示值。无需手动改。
 - **ST VS Code extension import 可能报 "project corrupted"**：clean project 从 CubeMX 重新 generate code 后直接打开可以绕过。
-- **12V 和 3.3V 共 rail 风险**：TB6612 的 VM (12V) 和 VCC (3.3V) 引脚相邻，探针误触可烧毁 3.3V rail 上所有模块。测量高压前必须断开高压电源。
+- **12V 与 low-voltage adjacency 风险**：TB6612 的 VM (12V) 和 VCC (3.3V) 引脚相邻，任何 wiring/probing short 都可能把高压带入 low-voltage rail。两次实际事故的具体 root cause 均未确认；测量或改线前必须断开全部电源。
 - **Python match/case capture pattern 陷阱**：`case ENCODER_0:` 里的 bare name 会被当成新变量捕获任意值，不会比较常量。要么用 dotted name `case MsgId.ENCODER_0:`，要么用 if/elif 代替。
 - **thumptech/STM32-MCP2515 库 sendMessageTo bug**：`readRegister(rts_addr)` 用 RTS 指令码 (0x81) 当寄存器地址读，读到垃圾值导致 ERROR_FAILTX。修复：改成 `readRegister((txbn + 3) << 4)` 读真正的 TXBnCTRL (0x30/0x40/0x50)。
 - **thumptech/STM32-MCP2515 缺 can.h**：仓库没提供 `can_frame` 定义和 Linux SocketCAN 常量（CAN_EFF_FLAG 等），需自建 can.h，typedef struct 而非 struct（C 兼容）。
@@ -258,24 +272,27 @@ Payload 格式：
 
 ---
 
-## 整车供电方案（已验证）
+## 整车供电方案（当前状态；isolation topology 待补图确认）
 
-**电源**：3S 1500mAh 35C LiPo (XT60) → XT60 分线
+**电源**：3S 1500mAh 35C LiPo，记录标称 11.4V (XT60) → XT60 分线
 
 **12V 直供（从 LiPo）**：
 - TB6612 × 2 的 VM（电机电源）
 
-**5V 供电（UBEC 5V 5A）**：
-- RPi 4B ← GPIO Pin 2 (5V) + Pin 6 (GND)（绕过板上 polyfuse，注意极性！）
-- STM32 Black Pill ← 5V pin
-- MCP2515+TJA1050 模块 ← VCC 5V（TJA1050 需要 5V，模块板载 LDO 给 MCP2515 降压 3.3V）
-- RPi 和 STM32 从 UBEC **并联取电**，不串联经过对方
+**最初 5V 供电（shared UBEC 5V 5A）**：
+- RPi、STM32 和 MCP2515+TJA1050 最初共用一个 5V/5A UBEC branch
+
+**当前 5V 供电**：
+- RPi 4B（8GB RAM，32GB microSD）← 独立的 5V/5A supply branch；具体 power-entry pin 和 protection 需要在 power-tree 图中复核
+- STM32 Black Pill ← motor-control 侧 5V branch
+- MCP2515+TJA1050 模块 ← motor-control 侧 5V branch（TJA1050 需要 5V，模块板载 LDO 给 MCP2515 降压 3.3V）
+- 这样做降低 motor-control fault 传播到 RPi 的概率，但在 ground 和 communication topology 完整确认前，不能称为已验证的 galvanic isolation
 
 **3.3V**：
 - TB6612 × 2 的 VCC（逻辑电源）← 从 STM32 3.3V pin 取或单独稳压
 - PS2 接收器 ← RPi 3.3V pin（RPi GPIO 不是 5V tolerant，必须 3.3V）
 
-**注意**：所有模块必须共 GND。RPi GPIO Pin 2 供电量到 ~4.8V，偶尔触发欠压警告但可稳定运行。
+**注意**：补 power-tree 图时必须明确两个 5V converter、ground、CAN signal path、fuse/current limit 和 RPi power-entry。若要 true galvanic isolation，power 与跨域 signal 都要按隔离方案设计；isolated DC-DC 也不能预防所有 12V short。
 
 ---
 
@@ -434,7 +451,7 @@ Payload 格式：
 2. **Ground truth sanity check**：在 1m×1m 海绵上做长距复测（前进 / 横移 / 粗旋转），更新 Week4 数据表（仍待做）
 3. **弱轮定位**：用 `encoder_monitor.py` 看纯前进时哪一路 tick 增速明显偏少，确认偏航根因
 4. **RPi 网络修复**：WiFi DHCP 不分配 IPv4 地址，需排查（不影响 CAN 和 GPIO 开发）
-5. **Textbook Week 1 扩写**：补完整 BOM、power tree、assembly/bring-up sequence、实物照片与验证步骤
+5. **Engineering Notes Weeks 1-3 review**：审阅 combined platform/programming narrative 与 Week 3 concept draft；补硬件 evidence 和 Week 3 diagrams/data/ROS capture 后开始 Week 4
 
 ---
 

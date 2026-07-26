@@ -24,7 +24,7 @@ The Raspberry Pi uses a sparse checkout of this repository. Do not edit the Pi
 copy directly. The reproducible path is local edit, Git push, Pi pull, build,
 and hardware test.
 
-## Build the textbook locally
+## Build the notes locally
 
 Use Python 3.12 and install the pinned documentation dependencies:
 

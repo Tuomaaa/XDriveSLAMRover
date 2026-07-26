@@ -18,6 +18,16 @@
   letter-spacing: 0;
 }
 
+.admonition.asset-placeholder {
+  border-left: 5px solid #6b7280;
+  background: #f5f5f5;
+}
+
+.admonition.asset-placeholder .admonition-title {
+  color: #374151;
+  letter-spacing: 0;
+}
+
 .architecture-figure {
   margin: 1.5rem auto 2rem;
   max-width: 920px;
@@ -26,6 +36,62 @@
 .architecture-figure img {
   display: block;
   height: auto;
+  width: 100%;
+}
+
+.chapter-wide-figure {
+  margin: 1.5rem auto 2rem;
+  max-width: 980px;
+}
+
+.chapter-wide-figure img {
+  display: block;
+  height: auto;
+  width: 100%;
+}
+
+.media-grid {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin: 1.25rem 0 2rem;
+}
+
+.media-grid-three {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.media-grid figure {
+  margin: 0;
+  min-width: 0;
+}
+
+.media-grid img {
+  display: block;
+  height: 240px;
+  object-fit: contain;
+  width: 100%;
+}
+
+.media-grid figcaption {
+  color: #4b5563;
+  font-size: 0.9rem;
+  margin-top: 0.4rem;
+  text-align: center;
+}
+
+.parts-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.parts-grid img {
+  height: 180px;
+}
+
+.chapter-video {
+  display: block;
+  margin: 1.25rem 0 1rem;
+  max-height: 75vh;
   width: 100%;
 }
 
@@ -44,6 +110,18 @@ footer .textbook-license {
 }
 
 @media screen and (max-width: 768px) {
+  .media-grid,
+  .media-grid-three,
+  .parts-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .media-grid img,
+  .parts-grid img {
+    height: auto;
+    max-height: 420px;
+  }
+
   .rst-content table.docutils {
     display: block;
     overflow-x: auto;

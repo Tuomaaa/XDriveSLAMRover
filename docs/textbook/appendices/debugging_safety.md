@@ -6,12 +6,18 @@ diagnosis, and repair belong.
 
 ## Power and hardware safety
 
-- {ref}`12 V rail injection <power-rail-incident>` - an oscilloscope probe
-  bridged TB6612 `VM` and `VCC`, destroying multiple low-voltage devices.
+- {ref}`Two destructive electrical incidents <power-rail-incident>` - two
+  unresolved shorts destroyed two STM32 boards, three TB6612 modules, and one
+  ST-Link in total. The notes separate observed damage from unconfirmed root
+  cause.
 - Raspberry Pi GPIO is not 5 V tolerant; the PS2 receiver uses 3.3 V logic.
 - The TJA1050 module still requires its documented 5 V supply for valid CAN
   transceiver levels even though the MCP2515 logic side is lower voltage.
+- A separate Raspberry Pi supply branch reduces exposure but is not necessarily
+  galvanically isolated; shared grounds and communication paths still matter.
 - High- and low-voltage harnesses must be physically separated before probing.
+- Continuity checks are only triage. Reintroduce repaired hardware one module at
+  a time with current limiting.
 
 ## Firmware and transport
 

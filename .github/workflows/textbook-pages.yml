@@ -1,4 +1,4 @@
-name: Textbook Pages
+name: Engineering Notes Pages
 
 on:
   push:
@@ -37,7 +37,7 @@ jobs:
       - name: Install documentation dependencies
         run: python -m pip install -r docs/textbook/requirements.txt
 
-      - name: Build textbook with warnings as errors
+      - name: Build engineering notes with warnings as errors
         run: >-
           sphinx-build -W --keep-going -b html
           docs/textbook build/textbook

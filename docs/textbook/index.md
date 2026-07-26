@@ -1,14 +1,15 @@
-# SummerSLAM
+# SummerSLAM Engineering Notes
 
-**A hardware-backed X-drive rover for learning localization and SLAM by
-building, measuring, and reproducing the complete system.**
+**Building an X-Drive SLAM Rover, One Layer at a Time**
 
-:::{admonition} Textbook status: Week 1-6 scaffold
+:::{admonition} Notes status: Weeks 1-3 first drafts, Weeks 4-6 outlined
 :class: status status-progress
 
-The navigation and evidence map are live. The chapters are intentionally
-outlines and will be expanded in order from Week 1. A chapter's engineering
-status describes the rover, not the completeness of the written chapter.
+The site structure and evidence map are live. Weeks 1-2 form one platform and
+programming narrative, and Week 3 begins the concept-focused localization
+work. Weeks 4-6 remain outlines and will be expanded in order. A chapter's
+engineering status describes the rover, not the completeness of the written
+notes.
 :::
 
 SummerSLAM connects an STM32F411 motor-control layer to a Raspberry Pi 4B
@@ -30,14 +31,13 @@ to the ROS 2 computer for estimation.
 
 | Week | Topic | Chapter status | Engineering evidence |
 | --- | --- | --- | --- |
-| {doc}`1 <weeks/week1_platform>` | Rover platform and hardware bring-up | Outline | Drive electronics, power, and base operation recorded |
-| {doc}`2 <weeks/week2_can_ros2>` | STM32, CAN, and ROS 2 control pipeline | Outline | Core STM32-CAN link verified; ROS 2 integration remains ongoing |
-| {doc}`3 <weeks/week3_odometry>` | X-drive kinematics and encoder odometry | Outline | Encoder map, signs, CPR, frame convention, and estimator implemented |
+| {doc}`1-2 <weeks/week1_platform>` | Platform bring-up and programming | First draft | Motors, encoders, CAN transport, and PS2 control verified; tutorials and build evidence remain to be added |
+| {doc}`3 <weeks/week3_odometry>` | X-drive kinematics and encoder odometry | First draft | Encoder map, signs, CPR, frame convention, and estimator implemented |
 | {doc}`4 <weeks/week4_motion_uncertainty>` | Ground-truth calibration and motion uncertainty | Outline | Translation scale identified; full repeatability campaign remains pending |
 | {doc}`5 <weeks/week5_ultrasonic>` | Ultrasonic sensing and measurement model | Outline | Bench calibration and map validation completed |
 | {doc}`6 <weeks/week6_mcl>` | Monte Carlo Localization | In progress | Design is on `main`; implementation remains on `week6-mcl` |
 
-## How to use this textbook
+## How to use these notes
 
 Read the chapters in order if you are reproducing the rover. Each chapter will
 grow toward the same contract:
@@ -48,6 +48,11 @@ grow toward the same contract:
 4. Describe the experiment and expected observations.
 5. Separate verified results from hypotheses and remaining work.
 6. Preserve failures and repairs as reproducible debugging evidence.
+
+This is an engineering process journal, not a general robotics textbook. It
+explains what I chose, what failed, what I measured, and what I would change so
+that a reader can adapt the process instead of treating one parts list as the
+only correct build.
 
 The source repository is
 [Tuomaaa/XDriveSLAMRover](https://github.com/Tuomaaa/XDriveSLAMRover).
@@ -60,7 +65,6 @@ Project status and decisions are tracked in
 :caption: Weeks 1-6
 
 weeks/week1_platform
-weeks/week2_can_ros2
 weeks/week3_odometry
 weeks/week4_motion_uncertainty
 weeks/week5_ultrasonic

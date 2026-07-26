@@ -6,7 +6,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   const license = document.createElement("span");
   license.className = "textbook-license";
-  license.append("Textbook content is licensed under ");
+  license.append("Original notes and media by Thomas Pan are licensed under ");
 
   const link = document.createElement("a");
   link.href = "https://creativecommons.org/licenses/by/4.0/";
