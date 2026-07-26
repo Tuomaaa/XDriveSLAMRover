@@ -1,0 +1,52 @@
+.admonition.status {
+  border-left-width: 5px;
+}
+
+.admonition.status-outline {
+  border-left-color: #c58a18;
+}
+
+.admonition.status-verified {
+  border-left-color: #238636;
+}
+
+.admonition.status-progress {
+  border-left-color: #2b6cb0;
+}
+
+.admonition.status .admonition-title {
+  letter-spacing: 0;
+}
+
+.architecture-figure {
+  margin: 1.5rem auto 2rem;
+  max-width: 920px;
+}
+
+.architecture-figure img {
+  display: block;
+  height: auto;
+  width: 100%;
+}
+
+.rst-content table.docutils td,
+.rst-content table.docutils th {
+  vertical-align: top;
+}
+
+.rst-content code.literal {
+  overflow-wrap: anywhere;
+}
+
+footer .textbook-license {
+  display: block;
+  margin-top: 0.4rem;
+}
+
+@media screen and (max-width: 768px) {
+  .rst-content table.docutils {
+    display: block;
+    overflow-x: auto;
+    width: 100%;
+  }
+}

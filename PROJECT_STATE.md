@@ -1,6 +1,6 @@
 # SummerSLAM — Project State
 
-> 最后更新：2026-07-20
+> 最后更新：2026-07-26
 > 当前阶段：Week 5 完成 → Week 6。HC-SR04 双超声波全链路跑通（STM32 TIM9 input-capture → CAN 0x202 → RPi sensor_msgs/Range），bench calibration 拟合噪声模型 sigma(d)=0.0017+0.0078d，BeamModel (Prob Robotics Ch.6) + RectMap ray casting 端到端验证通过（4 位置 × 2 传感器，expected vs observed 误差 <1.3mm，log-likelihood true>wrong 全 PASS）。**下一步：Week 6 MCL 粒子滤波定位**
 
 ---
@@ -169,6 +169,20 @@ Payload 格式：
   - 数据: `data/ultrasonic/map_validation.csv`
 - [x] Sensor offset 实测: RIGHT=(-π/2, (0.0, -0.09)m), BACK=(π, (-0.09, 0.0)m)
 
+### Week 1-6 Textbook（骨架完成，待发布 2026-07-26）
+
+- [x] Sphinx + `sphinx_rtd_theme` + MyST Markdown 文档骨架放在 `docs/textbook/`
+- [x] Home、Week 1-6、Reproduction/CAN/Calibration/Debugging appendices 全部接入 `toctree`
+- [x] 每章分开标注 chapter status 与 engineering verification state，未完成内容不冒充已验证
+- [x] 硬件事故、CAN/firmware 坑、encoder swap、PID runaway、heartbeat 急停覆盖、frame/scale 修正全部建立 cross-reference
+- [x] GitHub Actions workflow：PR 只做 strict build，`main` 文档改动 build + deploy 到 GitHub Pages
+- [x] 原创 code 使用 MIT，原创 textbook content/media 使用 CC BY 4.0，署名 Thomas Pan；第三方 license 保持不变
+- [x] Local strict Sphinx build + desktop/mobile visual QA：pinned Sphinx 9.1.0 toolchain 下 `-W --keep-going` 零 warning；1440×900 / 390×844 检查 sidebar、mobile nav、search、公式、架构图、footer license、Prev/Next 均通过，无 horizontal overflow / broken image
+- [ ] External linkcheck：当前 remote `main` 尚无本地 ahead 的 Week 5/6 commits，因此对应 GitHub links 在 push 前返回 404；push 后重新执行 linkcheck
+- [ ] GitHub repo Settings → Pages → Source 切到 GitHub Actions，并在 push 后验证公开 URL：`https://tuomaaa.github.io/XDriveSLAMRover/`
+- [ ] 按顺序扩写正文：先 Week 1 Rover Platform and Hardware Bring-up，再 Week 2-6
+- **注意**：Week 6 MCL design/plan 在 `main`，实现仍在 `week6-mcl` branch；合并并重新验证前 textbook 必须保持 `In progress`
+
 ---
 
 ## 决策记录
@@ -220,6 +234,8 @@ Payload 格式：
 | 2026-07-20 | 噪声模型用两传感器合并拟合而非分别建模 | 两传感器 std 趋势几乎一致（per-sensor fit 差异 <0.5mm），分别建模增加参数但不增加 MCL 区分度。合并后 sigma(d) = 0.0017 + 0.0078*d |
 | 2026-07-20 | BeamModel 权重 w_hit=0.94/w_short=0.01/w_max=0.03/w_rand=0.02 | 实测数据非常干净：无 crosstalk、无 multipath 短读数，invalid 率 ~3% 直接映射到 w_max。w_short 保留极小值兜底 |
 | 2026-07-20 | Bias (~2.4mm + 0.47% of distance) 不补偿 | bias 绝对值 <8mm@1m，远小于 MCL 粒子间距（通常几十mm），补偿收益不抵引入的复杂度。如果将来 MCL 精度不够再回来加 |
+| 2026-07-26 | Textbook 用 Sphinx + `sphinx_rtd_theme` + MyST，GitHub Pages 作为 repo 首页 | 复用 PythonRobotics 的 Read the Docs layout，同时继续用 Markdown 写作；首发只展示 Week 1-6，完整建骨架后按周顺序扩写 |
+| 2026-07-26 | Code 用 MIT、textbook content/media 用 CC BY 4.0（Thomas Pan） | 软件与教材复用边界清楚；STM32 HAL、CMSIS 等第三方内容继续服从各自 license，不被 root license 重新授权 |
 
 ---
 
@@ -418,6 +434,7 @@ Payload 格式：
 2. **Ground truth sanity check**：在 1m×1m 海绵上做长距复测（前进 / 横移 / 粗旋转），更新 Week4 数据表（仍待做）
 3. **弱轮定位**：用 `encoder_monitor.py` 看纯前进时哪一路 tick 增速明显偏少，确认偏航根因
 4. **RPi 网络修复**：WiFi DHCP 不分配 IPv4 地址，需排查（不影响 CAN 和 GPIO 开发）
+5. **Textbook Week 1 扩写**：补完整 BOM、power tree、assembly/bring-up sequence、实物照片与验证步骤
 
 ---
 
