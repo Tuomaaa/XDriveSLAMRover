@@ -48,6 +48,7 @@ jobs:
         with:
           path: build/textbook
 
+  # Repository Settings -> Pages must use GitHub Actions before the first deploy.
   deploy:
     if: github.event_name != 'pull_request'
     needs: build
