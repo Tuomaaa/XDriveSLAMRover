@@ -11,11 +11,11 @@ closed-loop speed control, localization, and SLAM.
 
 ## What I wanted to build
 
-I did not only want a robot that could move. I wanted a platform that another
-student could understand, rebuild, and change without copying every part.
+I wanted a platform that another student can understand, rebuild, and change
+without copying every part.
 
 The first two weeks had one practical goal: turn a set of mechanical and
-electrical parts into a rover that could accept a command and return encoder
+electrical parts into a rover that can accept a command and return encoder
 data. That required several smaller steps:
 
 1. Choose the wheel layout and frame.
@@ -29,13 +29,13 @@ data. That required several smaller steps:
 
 The final platform uses two printed decks, four omni wheels, a Raspberry Pi 4B,
 and an STM32F411. The route was not direct. I first chose an MCU with too few
-timers, spent more time on CAN than UART would have needed, and lost several
+timers, spent more time on CAN than UART needs, and lost several
 boards in two electrical accidents. Those mistakes are part of the build
 process, so I include them instead of showing only the final rover.
 
 ## Part 1 - Build the hardware
 
-## Why I chose an X-drive
+### Why I chose an X-drive
 
 I chose a four-wheel X-drive because it is holonomic. The rover can move
 forward, sideways, or diagonally without turning first, and it can also rotate
@@ -61,20 +61,20 @@ rather than copy a familiar two-wheel solution.
   </figure>
 </div>
 
-## Start from a reference
+### Start from a reference
 
 My first mechanical reference was the
 [MERL ROSIE project](https://github.com/MERL-Rose-Hulman/MERL-Rose-Hulman.github.io/tree/main).
-I used it to understand how a small rover could stack its frame and
+I used it to understand how a small rover can stack its frame and
 electronics. I did not copy its plate shape or part layout.
 
-I chose the simplest frame I could make: two matching plates joined by
+I chose the simplest frame I was able to make: two matching plates joined by
 standoffs. I started with a square, rounded the corners, and sized the plate
 around the Raspberry Pi. The exact outline is not important. The plate only
 needs to hold the wheels in the correct geometry and leave enough space for
 the electronics.
 
-## Design the two plates
+### Design the two plates
 
 I used common M4 screws and nylon standoffs. The two plates are similar, which
 keeps the part count simple and makes replacement easier.
@@ -102,7 +102,7 @@ SolidWorks top view of the plate.
 
 The next two screenshots show my working sketches. They preserve the real
 design history, but too many dimensions are visible at the same time. Use them
-as a reference for the CAD process, not as clean manufacturing drawings.
+as a reference for the CAD process.
 
 <div class="media-grid">
   <figure>
@@ -118,11 +118,11 @@ as a reference for the CAD process, not as clean manufacturing drawings.
 The wheel radius is 25 mm, and the measured center-to-wheel distance used by
 the later kinematics is 115 mm.
 
-## Plan the decks around the parts
+### Plan the decks around the parts
 
-Before I finished the mounting holes, I listed every part that might need space
-on the rover. A plate layout is hard to change after printing, so the physical
-BOM should come before the final hole pattern.
+Before I finished the mounting holes, I listed every part that needs space on
+the rover. A plate layout is hard to change after printing, so the physical
+BOM must come before the final hole pattern.
 
 The top deck has room for a Raspberry Pi and a breadboard. I also left space
 near the corners for HC-SR04 sensors or cameras. The lower deck holds the
@@ -130,8 +130,7 @@ battery and IMU near the center. This keeps the heaviest part low and close to
 the middle of the rover.
 
 I expected the center position to help the IMU, but I did not measure that
-effect during Week 1. It should be treated as a design choice, not a tested
-result.
+effect during Week 1. Treat it as a design choice.
 
 <div class="media-grid">
   <figure>
@@ -144,28 +143,28 @@ result.
   </figure>
 </div>
 
-## Measure the real boards
+### Measure the real boards
 
 The mounting holes took more time than the plate outline. Online drawings were
 often missing dimensions, and clone boards did not always match the drawing I
 found.
 
 The faster method was to measure the actual board with calipers. I measured the
-hole spacing, checked connector clearance, and allowed a little extra space
+hole spacing, verified connector clearance, and allowed a little extra space
 where the fit did not need to be exact. This method also protects the design
 from small changes between sellers.
 
-## Print with useful margin
+### Print with useful margin
 
-I was worried that the center of the plates would bend, so the first print used
-PLA-CF and a high wall count. A later load check suggested that normal PLA
-would probably have been enough.
+I expected that the center of the plates can bend, so the first print used
+PLA-CF and a high wall count. A later load test suggested that normal PLA is
+probably enough.
 
-Even so, I would keep some extra strength and empty space. Research robots tend
+Even so, I keep some extra strength and empty space. Research robots tend
 to gain new sensors, adapter boards, wires, and temporary test hardware. A
 plate that fits only the first BOM becomes difficult to use very quickly.
 
-## Split the computing work
+### Split the computing work
 
 The Raspberry Pi runs ROS 2, localization, and later SLAM code. I used a
 Raspberry Pi 4B with 8 GB of RAM and a 32 GB microSD card. I recommend at least
@@ -189,7 +188,7 @@ than many Arduino-style boards, and flashing normally needs an ST-Link.
 Another MCU can work. The important step is to count its timers, channels,
 alternate pin functions, and GPIO before buying it.
 
-## The timer mistake
+### The timer mistake
 
 I first bought an STM32F103 Blue Pill without making a full timer table. The
 design needs one timer with four PWM channels and four more timers for the four
@@ -206,14 +205,12 @@ STM32F411CEU6 Black Pill.
 | Rear encoder 1 | TIM4 |
 | Rear encoder 2 | TIM5 |
 
-This mistake could have been avoided with a one-page peripheral table before
-buying the MCU.
+A one-page peripheral table before buying the MCU prevents this mistake.
 
-## Why I used CAN
+### Why I used CAN
 
 The Raspberry Pi and STM32 need a communication link. I chose CAN because I
-wanted experience with the message-based communication used in cars, not
-because this rover required it.
+wanted experience with the message-based communication used in cars.
 
 The Raspberry Pi uses a Waveshare CAN HAT. The STM32 side uses an MCP2515 and a
 TJA1050. The MCP2515 is the CAN controller and talks to the STM32 over SPI. The
@@ -221,11 +218,11 @@ TJA1050 is the transceiver that drives the physical CAN bus.
 
 The STM32F411 does not contain a CAN controller, so this choice added another
 chip, another clock setting, and more driver code. For a short point-to-point
-link between one Pi and one MCU, UART would have been much easier and fast
-enough. I recommend CAN only when learning CAN or adding more bus nodes is also
+link between one Pi and one MCU, UART is much easier and fast enough.
+I recommend CAN only when learning CAN or adding more bus nodes is also
 part of the project.
 
-## Main parts
+### Main parts
 
 The table gives the main parts and the reason each one exists. Exact sellers
 can change, so the electrical role matters more than one product link.
@@ -260,7 +257,7 @@ can change, so the electrical role matters more than one product link.
   <figure><img loading="lazy" src="../_static/week1/ps2-controller.jpg" alt="Wireless PS2 style controller"><figcaption>PS2 controller</figcaption></figure>
 </div>
 
-## Battery and power
+### Battery and power
 
 I considered a USB power bank, loose-cell battery holders, and a LiPo pack.
 Battery holders used too much space, while a power bank cost more and included
@@ -272,15 +269,15 @@ The battery rail powers the motor side of the TB6612 boards. At first, one
 Pi to its own 5 V, 5 A supply branch so that a fault in the motor-control branch
 was less likely to reach the most expensive board.
 
-Two power branches do not automatically provide galvanic isolation. They may
+Two power branches do not automatically provide galvanic isolation. They can
 still share ground, and CAN or UART signals can also connect the two sides. A
 real isolation plan must consider both power and communication paths.
 
 An isolated DC-DC converter can reduce fault spread, but it cannot prevent
-every short circuit. The power design should also use fuses, current limits,
+every short circuit. The power design must also include fuses, current limits,
 clear wire colors, correct connectors, and one-branch-at-a-time testing.
 
-## Full wiring reference
+### Full wiring reference
 
 The diagram below records the complete breadboard wiring. It is dense because
 it shows almost every connection in one view. Use the PDF for zooming, and use
@@ -291,8 +288,7 @@ the source files when you need to edit the circuit.
 :class: chapter-wide-figure
 :align: center
 
-Breadboard wiring for the rover. This is a wiring map, not a separate power-tree
-diagram.
+Breadboard wiring for the rover.
 :::
 
 <p><a href="../_static/week1/wiring-schematic.pdf">Download the full wiring PDF</a></p>
@@ -302,7 +298,7 @@ diagram.
 - [Open the full SCHE folder](https://github.com/Tuomaaa/XDriveSLAMRover/tree/main/SCHE)
 
 (power-rail-incident)=
-## Two short-circuit accidents
+### Two short-circuit accidents
 
 I had two serious electrical faults during bring-up. The exact short point was
 not proven in either case, so I do not present a likely cause as a confirmed
@@ -317,15 +313,15 @@ After a possible short, I use this first check:
 
 1. Remove the battery, USB cable, ST-Link, and every other power source.
 2. Measure resistance or continuity from GND to the 3.3 V, 5 V, and 12 V rails.
-3. Check weak GPIO and supply pins against GND.
+3. Verify weak GPIO and supply pins against GND.
 4. Compare the reading with a known-good board when possible.
 5. Watch whether resistance rises while capacitors charge.
-6. Test the ST-Link by itself; my failed unit no longer lit up.
+6. Test the ST-Link by itself. My failed unit no longer lit up.
 7. Reconnect one module at a time with a current-limited bench supply.
 
 A continuity beep is only a quick clue. It does not prove that a board is
 broken, and no beep does not prove that the board is healthy. A damaged board
-may still fail only when power or communication is applied.
+can still fail only when power or communication is applied.
 
 The main lesson is to respect the 12 V rail. Turn off all power before changing
 wires, keep high- and low-voltage wiring easy to separate, use fuses and current
@@ -346,14 +342,14 @@ expected. The shortest workflow that worked for me was:
 4. Flash the result with STM32CubeProgrammer.
 5. Use CAN and small Python tools for testing.
 
-## How to read the repository
+### How to read the repository
 
 Do not start by reading every file from top to bottom. Follow the system from
 hardware configuration to firmware and then to the Raspberry Pi.
 
 | Order | File | What to learn from it |
 | --- | --- | --- |
-| 1 | [SummerSLAM.ioc](https://github.com/Tuomaaa/XDriveSLAMRover/blob/main/stm32/SummerSLAM.ioc) | Open it in CubeMX. Check the pinout, clock tree, timers, SPI, GPIO, and code-generation settings. |
+| 1 | [SummerSLAM.ioc](https://github.com/Tuomaaa/XDriveSLAMRover/blob/main/stm32/SummerSLAM.ioc) | Open it in CubeMX. Verify the pinout, clock tree, timers, SPI, GPIO, and code-generation settings. |
 | 2 | [CMakePresets.json](https://github.com/Tuomaaa/XDriveSLAMRover/blob/main/stm32/CMakePresets.json) | Read the Debug and Release presets, build folder, generator, and toolchain file. |
 | 3 | [CMakeLists.txt](https://github.com/Tuomaaa/XDriveSLAMRover/blob/main/stm32/CMakeLists.txt) | See how the firmware target includes the CubeMX-generated CMake project. |
 | 4 | [main.c](https://github.com/Tuomaaa/XDriveSLAMRover/blob/main/stm32/Core/Src/main.c) | Read the motor map, encoder code, PWM code, startup, CAN receive path, and 20 ms control loop. |
@@ -375,7 +371,7 @@ For main.c, the fastest reading order is:
 
 This order shows the control flow before the low-level details.
 
-## Configure STM32CubeMX
+### Configure STM32CubeMX
 
 Download
 [STM32CubeMX](https://www.st.com/en/development-tools/stm32cubemx.html), then
@@ -383,18 +379,17 @@ open SummerSLAM.ioc instead of creating the configuration again by hand.
 
 Inside CubeMX, read these views in order:
 
-1. Pinout and Configuration: check TIM1 PWM, TIM2-TIM5 encoder mode, SPI1,
+1. Pinout and Configuration: verify TIM1 PWM, TIM2-TIM5 encoder mode, SPI1,
    MCP2515 GPIO, motor direction GPIO, and SWD.
-2. Clock Configuration: confirm the 100 MHz system clock.
-3. Project Manager: check the project name and CMake toolchain choice.
-4. Generate Code: regenerate only after checking which project files CubeMX may
-   overwrite.
+2. Clock Configuration: verify the 100 MHz system clock.
+3. Project Manager: verify the project name and CMake toolchain choice.
+4. Generate Code: regenerate only after you verify which project files CubeMX
+   can overwrite.
 
 The important lesson is that the .ioc file is the hardware setup. The generated
-C files are an output of that setup, not the best place to understand pin
-choices.
+C files are an output of that setup.
 
-## Build with CMake in VS Code
+### Build with CMake in VS Code
 
 The project already contains the build files. Start with CMakePresets.json, then
 read the root CMakeLists.txt, and only then open the generated
@@ -418,7 +413,7 @@ look related. An LLM is useful for turning the full error message into a short
 test list. I recommend changing one item at a time and rebuilding after each
 change, rather than accepting a large tool-generated rewrite.
 
-## Flash with STM32CubeProgrammer
+### Flash with STM32CubeProgrammer
 
 I used
 [STM32CubeProgrammer](https://www.st.com/en/development-tools/stm32cubeprog.html)
@@ -428,11 +423,11 @@ Connect the ST-Link to SWDIO, SWCLK, GND, and the correct reference voltage.
 Open CubeProgrammer, connect to the target, select the ELF file produced in the
 Debug build folder, program it, verify it, and reset the board.
 
-A USB-to-TTL adapter is also useful for simple debug text. Check the current
+A USB-to-TTL adapter is also useful for simple debug text. Verify the current
 .ioc file before connecting it, because this project later reused the original
 UART pins for the ultrasonic sensors.
 
-## Finalize Dupont wiring, then draw the PCB
+### Finalize Dupont wiring, then draw the PCB
 
 I delayed the PCB because PCB design sounded much more difficult than it really
 was. Online advice quickly leads to topics such as 90-degree corners, SI/PI,
@@ -455,10 +450,10 @@ and make the PCB. Do not wait until the end of the project.
 For a low-speed rover like this one, do not let advanced SI/PI advice stop the
 first board. Draw clear connections, use correct voltage and polarity, add
 decoupling, choose traces that can carry the current, label connectors, and run
-ERC and DRC. A right-angle trace is not the main risk here; a loose Dupont wire
-or a wrong power connection is much more likely to cause trouble.
+ERC and DRC. A right-angle trace is not the main risk here. A loose Dupont
+wire or a wrong power connection is much more likely to cause trouble.
 
-An LLM can help review the schematic and may notice a missing connection or a
+An LLM can help review the schematic and can notice a missing connection or a
 wrong net name. It is less reliable at checking the full PCB layout, so use
 datasheets, ERC, DRC, and your own review for that step.
 
@@ -466,9 +461,9 @@ My practical advice is: once the wiring works and is final, just draw the PCB.
 Order it while working on kinematics, so manufacturing time runs in parallel
 with software work.
 
-## Make one motor turn
+### Make one motor turn
 
-The first firmware test should be small. Lift the wheel off the floor, start one
+Make the first firmware test small. Lift the wheel off the floor, start one
 TIM1 PWM channel, set the two direction pins, and begin with a low duty cycle.
 After one channel works, repeat the same test for the other three motors.
 
@@ -476,14 +471,14 @@ The complete implementation is in
 [motor_set_pwm()](https://github.com/Tuomaaa/XDriveSLAMRover/blob/main/stm32/Core/Src/main.c#L185).
 Read that function together with the
 [four PWM start calls](https://github.com/Tuomaaa/XDriveSLAMRover/blob/main/stm32/Core/Src/main.c#L264).
-The first link explains direction and duty limits; the second shows which timer
+The first link explains direction and duty limits. The second shows which timer
 channels must be running.
 
 Testing one motor first makes power, direction, and pin errors much easier to
 locate. Testing all four at once gives too many possible causes when nothing
 moves.
 
-## Read all four encoders
+### Read all four encoders
 
 The STM32 timers can decode quadrature encoder signals in hardware. The startup
 code enables TIM2, TIM3, TIM4, and TIM5 with TIM_CHANNEL_ALL.
@@ -494,11 +489,11 @@ before reading the CAN transmit code. The function shows why TIM3 and TIM4 need
 software overflow handling: they are 16-bit timers, while TIM2 and TIM5 are
 32-bit.
 
-At this stage, the goal is only to confirm that every encoder count changes.
+At this stage, the goal is only to verify that every encoder count changes.
 Wheel labels, sign, counts per revolution, and the X-drive scale are handled in
 the Week 3 odometry chapter.
 
-## Test CAN on the Raspberry Pi
+### Test CAN on the Raspberry Pi
 
 The STM32 uses
 [mcp2515.c](https://github.com/Tuomaaa/XDriveSLAMRover/blob/main/stm32/Core/Src/mcp2515.c).
@@ -515,7 +510,7 @@ then
 [encode functions](https://github.com/Tuomaaa/XDriveSLAMRover/blob/main/ros2_ws/src/protocol.py#L57),
 and finally
 [decode()](https://github.com/Tuomaaa/XDriveSLAMRover/blob/main/ros2_ws/src/protocol.py#L72).
-This file should match the CAN IDs and payload order in main.c.
+This file must match the CAN IDs and payload order in main.c.
 
 The bus runs at 500 kbit/s. After the CAN HAT and SocketCAN interface are
 configured, bring the interface up and watch raw frames:
@@ -532,27 +527,27 @@ cd ros2_ws/src
 sudo python3 encoder_monitor.py
 :::
 
-Turn one wheel at a time. The raw view should show CAN IDs 0x200 and 0x201, while
-encoder_monitor.py should show which motor count changed.
+Turn one wheel at a time. The raw view shows CAN IDs 0x200 and 0x201, while
+encoder_monitor.py shows which motor count changed.
 
 (can-stack-failures)=
-## CAN and tool problems I found
+### CAN and tool problems I found
 
 - The MCP2515 library read the wrong register after sending a frame. The fix was
   to read the real TXBnCTRL register.
 - The library did not include the can_frame type and SocketCAN-style flags used
   by this project, so I added can.h.
-- CubeMX code generation could remove manual CMake source entries. Check that
+- CubeMX code generation can remove manual CMake source entries. Verify that
   mcp2515.c is still part of the build after regeneration.
 - A Python match case used a plain name, which Python treated as a new variable
   instead of a value to compare. The decoder now uses if and elif.
 - Raspberry Pi GPIO is not 5 V tolerant. The PS2 receiver uses 3.3 V logic,
   while the TJA1050 module still needs its stated 5 V supply.
 
-## Add the PS2 controller
+### Add the PS2 controller
 
 I did not include a hand controller in the first plan. Later, I bought a
-low-cost PS2-style wireless controller so I could test the rover without
+low-cost PS2-style wireless controller so I can test the rover without
 writing a full ROS command path first.
 
 Read the controller files in two layers. In
@@ -568,7 +563,7 @@ The lower _RawGPIO class is only the GPIO access layer.
 Next, open
 [PS2_Drive_Test.py](https://github.com/Tuomaaa/XDriveSLAMRover/blob/main/ros2_ws/src/PS2_Drive_Test.py).
 Read the
-[heartbeat thread](https://github.com/Tuomaaa/XDriveSLAMRover/blob/main/ros2_ws/src/PS2_Drive_Test.py#L32)
+[heartbeat thread](https://github.com/Tuomaaa/XDriveSLAMRover/blob/main/ros2_ws/src/PS2_Drive_Test.py#L35)
 before the
 [main drive loop](https://github.com/Tuomaaa/XDriveSLAMRover/blob/main/ros2_ws/src/PS2_Drive_Test.py#L64).
 The heartbeat must keep running even when a controller read takes time.
@@ -580,7 +575,7 @@ cd ros2_ws/src
 sudo python3 PS2_Drive_Test.py
 :::
 
-Lift the rover before the first test. Check forward, reverse, left, and right,
+Lift the rover before the first test. Verify forward, reverse, left, and right,
 keep a fast way to remove power, and verify the heartbeat stop before driving
 on the floor.
 
@@ -589,7 +584,7 @@ is not the main research topic, so using an existing library or an LLM-assisted
 driver is reasonable. The real hardware checks still matter: verify the logic
 voltage, clock timing, button map, disconnect behavior, and stop path.
 
-## Drive test
+### Drive test
 
 The video shows the rover moving during bring-up.
 

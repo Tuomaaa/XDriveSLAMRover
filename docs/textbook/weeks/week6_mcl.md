@@ -37,10 +37,10 @@ drift inside the measured rectangular map.
 - The standard `rot1/trans/rot2` motion decomposition assumes a platform that
   turns to translate. SummerSLAM instead perturbs body-frame $dx$, $dy$, and
   $d\theta$ so lateral X-drive motion remains representable.
-- A rotational noise floor is needed to maintain particle heading diversity;
-  it does not create heading observability where the sensor geometry lacks it.
-- Synthetic convergence evidence must be rendered against ground truth, not
-  only compared with dead reckoning, or a shared error can look like success.
+- The filter needs a rotational noise floor to maintain particle heading
+  diversity. It does not create heading observability where the sensor geometry lacks it.
+- The convergence test must compare synthetic evidence against ground truth.
+  A shared error can look like success.
 
 ## Source and evidence
 

@@ -12,7 +12,7 @@ claim that the final odometry accuracy is known.
 
 ## From a moving rover to a motion estimate
 
-Weeks 1-2 ended with a rover that could move and send encoder counts. Week 3
+Weeks 1-2 ended with a rover that can move and send encoder counts. Week 3
 asks a different question: what do those four counts say about the motion of
 the whole rover?
 
@@ -52,7 +52,7 @@ clear.
 
 | Order | File | What to read |
 | ---: | --- | --- |
-| 1 | [main.c motor order](https://github.com/Tuomaaa/XDriveSLAMRover/blob/main/stm32/Core/Src/main.c#L58) | Start with `MotorPosition`, then read the two encoder CAN frames. This is the motor-side order, not proof of the physical encoder harness. |
+| 1 | [main.c motor order](https://github.com/Tuomaaa/XDriveSLAMRover/blob/main/stm32/Core/Src/main.c#L58) | Start with `MotorPosition`, then read the two encoder CAN frames. This is the motor-side order. |
 | 2 | [protocol.py decoder](https://github.com/Tuomaaa/XDriveSLAMRover/blob/main/ros2_ws/src/protocol.py#L72) | See how CAN `0x200` and `0x201` become two pairs of signed 32-bit cumulative counts. |
 | 3 | [encoder_monitor.py main loop](https://github.com/Tuomaaa/XDriveSLAMRover/blob/main/ros2_ws/src/encoder_monitor.py#L33) | Read the baseline and delta logic. During mapping, turn one wheel at a time and treat the four columns as observed channels rather than trusting a wheel name in advance. |
 | 4 | [odometry.py configuration](https://github.com/Tuomaaa/XDriveSLAMRover/blob/main/ros2_ws/src/odometry.py#L27) | Read the geometry, translation scale, CPR, `MOTOR_MAP`, and `ENCODER_SIGN` before reading the equations. |
@@ -66,7 +66,7 @@ Inside `odometry.py`, the fastest reading order is:
 2. [Encoder harness map](https://github.com/Tuomaaa/XDriveSLAMRover/blob/main/ros2_ws/src/odometry.py#L46)
 3. [Encoder sign correction](https://github.com/Tuomaaa/XDriveSLAMRover/blob/main/ros2_ws/src/odometry.py#L69)
 4. [Tick-to-wheel conversion](https://github.com/Tuomaaa/XDriveSLAMRover/blob/main/ros2_ws/src/odometry.py#L90)
-5. [Forward kinematics](https://github.com/Tuomaaa/XDriveSLAMRover/blob/main/ros2_ws/src/odometry.py#L139)
+5. [Forward kinematics](https://github.com/Tuomaaa/XDriveSLAMRover/blob/main/ros2_ws/src/odometry.py#L160)
 6. [Midpoint pose integration](https://github.com/Tuomaaa/XDriveSLAMRover/blob/main/ros2_ws/src/odometry.py#L164)
 7. [Standalone smoke test](https://github.com/Tuomaaa/XDriveSLAMRover/blob/main/ros2_ws/src/odometry.py#L185)
 
@@ -107,8 +107,8 @@ ENCODER_CPR = 2779
 ```
 
 Keeping these values outside the estimator makes it clear which numbers come
-from the physical rover or calibration. A change to the chassis should update
-this block, not be hidden inside the kinematic equations.
+from the physical rover or calibration. A change to the chassis must update
+this block.
 
 The two rear channels show why position names and numeric indexes must be kept
 separate:
@@ -135,7 +135,7 @@ The frame construction is visible in
 [main.c](https://github.com/Tuomaaa/XDriveSLAMRover/blob/main/stm32/Core/Src/main.c#L364).
 The Python decoder for the same payload is in
 [protocol.py](https://github.com/Tuomaaa/XDriveSLAMRover/blob/main/ros2_ws/src/protocol.py#L72).
-These two files should be read together whenever the CAN layout changes.
+Read these two files together whenever the CAN layout changes.
 
 For wheel $i$, the estimator calculates:
 
@@ -145,7 +145,7 @@ $$
 
 Cumulative counts are useful because one lost CAN frame does not permanently
 lose its motion. The next received total still includes the missing interval.
-With per-frame deltas, that motion would be gone.
+With per-frame deltas, that motion is gone.
 
 The first sample cannot produce a delta, so `update()` stores it as a baseline
 and returns no pose result. It also rejects duplicate or out-of-order
@@ -244,8 +244,8 @@ wheels is only about 0.07%. One shared CPR is reasonable for this stage.
 
 These values came from the manual ten-turn test. The compact raw trial log and
 shaft-mark photos were not preserved as a publishable artifact, so the table
-should not be treated as a full calibration dataset. A careful reproduction
-should mark the shaft, record the start and end count for every trial, repeat
+is not a full calibration dataset. A careful reproduction must mark
+the shaft, record the start and end count for every trial, repeat
 the measurement, and keep that raw table in the repository.
 
 The STM32 PID branch still contains `ENCODER_CPR = 2800`, while odometry uses
@@ -264,7 +264,7 @@ I treat four calibration questions as separate variables:
 
 Changing one of these values to hide another problem makes later debugging
 much harder. For example, an encoder sign can fix one reversed wheel, but it
-should not be used to repair a left-right coordinate-frame mirror.
+must not be used to repair a left-right coordinate-frame mirror.
 
 (encoder-map-failure)=
 ### Failure: the rear encoder channels were swapped
@@ -275,7 +275,7 @@ My first motion test had a specific pattern:
 - Sideways motion appeared as rotation.
 - Rotation appeared as sideways motion.
 
-If only one sign were wrong, the channels would mix in a less symmetric way.
+If only one sign is wrong, the channels mix in a less symmetric way.
 The clean exchange between $v_y$ and $\omega$ suggested that two wheel
 positions were swapped.
 
@@ -309,7 +309,7 @@ Python map describes where the feedback wires actually landed.
 ## Calibrate encoder signs with one simple motion
 
 After mapping the channels, I drove straight forward. All four physical wheel
-velocities should be positive for that command, but all four raw encoder totals
+velocities must be positive for that command, but all four raw encoder totals
 decreased. The measured correction is therefore:
 
 ```python
@@ -338,7 +338,7 @@ calculating speed. Read the sign application and safety gate in
 hardware.
 
 The practical test rule is simple: lift the rover, begin with low output, and
-confirm that a positive command produces positive measured feedback before
+verify that a positive command produces positive measured feedback before
 enabling closed-loop control.
 
 ## Separate the physical model from the controller units
@@ -384,7 +384,7 @@ direction of motion.
 
 This distinction matters when reproducing the project. The controller code is
 good for manual direction commands, but it is not a unit-correct `cmd_vel` to
-wheel-RPM conversion. A future autonomous velocity controller should convert
+wheel-RPM conversion. A future autonomous velocity controller must convert
 SI units explicitly and include the rover geometry in that boundary.
 
 The controller also scales all four commands together when any one command
@@ -441,8 +441,7 @@ After the rear-channel map was fixed, physical left motion produced negative
 $v_y$, and a physical counter-clockwise turn produced negative $\omega$.
 Forward $v_x$ was already correct.
 
-That pattern means the remaining problem is a left-right frame mirror, not a
-free encoder sign. Negating $v_y$ and $\omega$ at the forward-kinematics output
+That pattern means the remaining problem is a left-right frame mirror. Negating $v_y$ and $\omega$ at the forward-kinematics output
 aligns odometry with REP-103 while leaving the already-correct $v_x$ alone.
 The detailed debugging record is in
 {ref}`REP-103 frame mirror <frame-mirror-failure>`.
@@ -460,16 +459,16 @@ $\sqrt{2}$ corrects that convention without changing rotation.
 
 The measurements are stored in
 [data/Week4 Trials.xlsx](https://github.com/Tuomaaa/XDriveSLAMRover/blob/main/data/Week4%20Trials.xlsx).
-They are early tests, not a final accuracy result: translation was measured on
+They are early tests: translation was measured on
 foam, and the actual rotation angles were estimated by eye. The evidence is
 strong enough to identify the missing projection factor, but not strong enough
 to claim precise long-run odometry performance. See
 {ref}`missing 45-degree projection <translation-scale-failure>` for the full
 failure trail.
 
-This $\sqrt{2}$ correction belongs to the conventions used by this rover. It
-should not be copied into another X-drive implementation without deriving its
-wheel equations and checking real motion.
+This $\sqrt{2}$ correction belongs to the conventions of this rover. Before
+you copy it into another X-drive implementation, derive its wheel equations
+and verify the real motion.
 
 ## Integrate body motion into the world frame
 
@@ -550,11 +549,11 @@ python ros2_ws/src/odometry.py
 
 The ROS boundary belongs to `can_bridge_node.py`. The node:
 
-1. decodes `0x200` and `0x201`;
-2. waits until all four cumulative counts are available;
-3. calls `OdometryEstimator.update()`;
-4. publishes `nav_msgs/Odometry` on `odom`;
-5. broadcasts `odom -> base_link`;
+1. decodes `0x200` and `0x201`,
+2. waits until all four cumulative counts are available,
+3. calls `OdometryEstimator.update()`,
+4. publishes `nav_msgs/Odometry` on `odom`,
+5. broadcasts `odom -> base_link`,
 6. prints a reduced-rate pose log for ground-truth work.
 
 The estimator boundary itself is deliberately short:
@@ -569,7 +568,7 @@ self._publish_odom(x, y, theta, vx, vy, omega)
 ```
 
 `None` is expected for the first sample and for a rejected timestamp. The ROS
-node does not reproduce any kinematic math; it only moves validated numbers
+node does not reproduce any kinematic math. It only moves validated numbers
 into messages and transforms.
 
 Read the estimator handoff in
@@ -601,7 +600,7 @@ different class of mistake:
 2. Drive forward to fix all four encoder signs.
 3. Move left to verify the lateral frame direction.
 4. Turn counter-clockwise to verify angular direction.
-5. Measure translation and rotation to check scale.
+5. Measure translation and rotation to verify scale.
 6. Only then run longer paths and drift tests.
 
 The observed error pattern is often more useful than the size of the error:
@@ -623,7 +622,7 @@ block ran immediately afterward and wrote a nonzero PWM value again. The stop
 command was correct for only a moment.
 
 The fix calculates `hb_ok` and uses it to gate the full control update. When
-the heartbeat is missing, PWM stays at zero; the PID branch also clears its
+the heartbeat is missing, PWM stays at zero. The PID branch also clears its
 stored error to prevent windup. Encoder accumulation continues so timer wraps
 are still handled correctly.
 
@@ -651,7 +650,7 @@ Calling `motors_stop()` remains useful as the immediate response, but the
 second condition is what prevents the regular control loop from turning the
 motors back on.
 
-This safety behavior should always be tested with the rover lifted before a
+Always test this safety behavior with the rover lifted before a
 floor run.
 
 ## What Week 3 established
