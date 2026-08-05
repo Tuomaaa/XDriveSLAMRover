@@ -431,6 +431,7 @@ seconds and the error grows without bound. The floor (`SIGMA_ROT_FLOOR =
 slowly track heading changes through the second-order range signal. It
 cannot eliminate heading error, but it prevents runaway drift.
 
+(mcl-design-corrections)=
 ## Design corrections
 
 ### Holonomic motion model
