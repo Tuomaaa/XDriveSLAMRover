@@ -9,6 +9,28 @@ implementation and synthetic replay evidence must be merged and reverified
 before this chapter can claim completion.
 :::
 
+:::{admonition} File guide
+:class: tip
+
+**Core algorithm — read this first**
+
+- [`mcl.py`](https://github.com/Tuomaaa/XDriveSLAMRover/blob/week6-mcl/ros2_ws/src/mcl.py) — particle filter: predict (body-frame motion model), update (measurement scoring), low-variance resample, weighted circular-mean estimate
+
+**Recommended — Week 5 dependencies**
+
+- [`measurement_model.py`](https://github.com/Tuomaaa/XDriveSLAMRover/blob/main/ros2_ws/src/measurement_model.py) — `BeamModel` that scores each particle
+- [`map_model.py`](https://github.com/Tuomaaa/XDriveSLAMRover/blob/main/ros2_ws/src/map_model.py) — `RectMap` that computes expected ranges
+
+**Infrastructure — safe to skip**
+
+- `mcl_log.py` — CSV column contract between logger and replay
+- `mcl_offline.py` — replay loop and GIF rendering
+
+**Tests — safe to skip**
+
+- `mcl_test.py` — synthetic convergence test (L-path) and heading tracking test (arc)
+:::
+
 ## From range scoring to pose estimation
 
 Week 5 built a log-likelihood function that scores a candidate pose against

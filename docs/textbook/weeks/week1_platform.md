@@ -9,6 +9,27 @@ worked on real hardware from later work such as calibrated odometry,
 closed-loop speed control, localization, and SLAM.
 :::
 
+:::{admonition} File guide
+:class: tip
+
+**Core — read these first**
+
+- [`main.c`](https://github.com/Tuomaaa/XDriveSLAMRover/blob/main/stm32/Core/Src/main.c) — motor map (`MotorPosition`), encoder readout, CAN heartbeat, 20 ms control loop
+- [`protocol.py`](https://github.com/Tuomaaa/XDriveSLAMRover/blob/main/ros2_ws/src/protocol.py) — CAN message contract between STM32 and Pi
+
+**Recommended**
+
+- [`PS2_Drive_Test.py`](https://github.com/Tuomaaa/XDriveSLAMRover/blob/main/ros2_ws/src/PS2_Drive_Test.py) — controller input to motor commands, heartbeat thread
+- [`encoder_monitor.py`](https://github.com/Tuomaaa/XDriveSLAMRover/blob/main/ros2_ws/src/encoder_monitor.py) — raw four-wheel encoder display for harness verification
+
+**Infrastructure — safe to skip**
+
+- `mcp2515.c` — MCP2515 SPI driver
+- `PS2.py` — PS2 controller GPIO/SPI driver
+- `can_interface.py` — SocketCAN wrapper
+- `SummerSLAM.ioc`, `CMakePresets.json`, `CMakeLists.txt` — CubeMX configuration and build system
+:::
+
 ## What I wanted to build
 
 I wanted a platform that another student can understand, rebuild, and change

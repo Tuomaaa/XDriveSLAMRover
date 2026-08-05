@@ -10,6 +10,25 @@ and TF test on the Raspberry Pi are not complete, so this chapter does not
 claim that the final odometry accuracy is known.
 :::
 
+:::{admonition} File guide
+:class: tip
+
+**Core algorithm — read this first**
+
+- [`odometry.py`](https://github.com/Tuomaaa/XDriveSLAMRover/blob/main/ros2_ws/src/odometry.py) — forward kinematics, `MOTOR_MAP`, `ENCODER_SIGN`, CPR, midpoint pose integration
+
+**Recommended**
+
+- [`main.c`](https://github.com/Tuomaaa/XDriveSLAMRover/blob/main/stm32/Core/Src/main.c) — motor order (`MotorPosition`), encoder CAN frames (0x200/0x201)
+- [`encoder_monitor.py`](https://github.com/Tuomaaa/XDriveSLAMRover/blob/main/ros2_ws/src/encoder_monitor.py) — channel mapping procedure (turn one wheel, observe which column changes)
+- [`PS2_Drive_Test.py`](https://github.com/Tuomaaa/XDriveSLAMRover/blob/main/ros2_ws/src/PS2_Drive_Test.py) — inverse kinematics convention
+
+**Infrastructure — safe to skip**
+
+- `protocol.py` — CAN decoder (covered in Weeks 1-2)
+- `can_bridge_node.py` — CAN-to-ROS bridge and TF broadcast
+:::
+
 ## From a moving rover to a motion estimate
 
 Weeks 1-2 ended with a rover that can move and send encoder counts. Week 3

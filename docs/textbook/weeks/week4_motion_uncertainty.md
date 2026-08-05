@@ -10,6 +10,19 @@ foam surface is not yet complete. This chapter does not claim a final
 translation or heading noise distribution.
 :::
 
+:::{admonition} File guide
+:class: tip
+
+**Core — read this first**
+
+- [`odometry.py`](https://github.com/Tuomaaa/XDriveSLAMRover/blob/main/ros2_ws/src/odometry.py) — `TRANSLATION_SCALE`, `ENCODER_CPR`, forward kinematics with $\sqrt{2}$ projection and `vy`/`omega` negation
+
+**Recommended**
+
+- [`Week4 Trials.xlsx`](https://github.com/Tuomaaa/XDriveSLAMRover/blob/main/data/Week4%20Trials.xlsx) — raw ground-truth measurements (forward, strafe, rotation on foam)
+- [`PS2_Drive_Test.py`](https://github.com/Tuomaaa/XDriveSLAMRover/blob/main/ros2_ws/src/PS2_Drive_Test.py) — D-pad crawl mode for precise positioning during trials
+:::
+
 ## From kinematics to measured motion
 
 Week 3 produced an encoder odometry estimator that outputs a pose. Week 4

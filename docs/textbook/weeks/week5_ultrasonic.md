@@ -9,6 +9,31 @@ map-validation channels were within 1.3 mm of the expected value. The true
 pose outscored every tested shifted pose.
 :::
 
+:::{admonition} File guide
+:class: tip
+
+**Core algorithm — read these first**
+
+- [`measurement_model.py`](https://github.com/Tuomaaa/XDriveSLAMRover/blob/main/ros2_ws/src/measurement_model.py) — `BeamModel` (4-component mixture: hit/short/max/rand), log-space likelihood
+- [`map_model.py`](https://github.com/Tuomaaa/XDriveSLAMRover/blob/main/ros2_ws/src/map_model.py) — `RectMap`, 2D ray casting with sensor offsets
+
+**Recommended**
+
+- [`hc_sr04.c`](https://github.com/Tuomaaa/XDriveSLAMRover/blob/main/stm32/Core/Src/hc_sr04.c) — TIM9 input-capture state machine, sequential right-then-back ranging
+
+**Infrastructure — safe to skip**
+
+- `main.c` — CAN frame 0x202 construction (five bytes, two ranges plus status)
+- `protocol.py` — 0x202 codec (`right_mm`, `back_mm`, validity bits)
+- `can_bridge_node.py` — `sensor_msgs/Range` publication
+
+**Data — reference only**
+
+- `data/ultrasonic/bench_calibration.csv` — 800 samples, 2 sensors × 4 distances × 100
+- `data/ultrasonic/bench_summary.csv` — group statistics (mean, std, bias, invalid rate)
+- `data/ultrasonic/map_validation.csv` — 4 positions × 100 samples × 2 sensors
+:::
+
 ## From dead reckoning to range sensing
 
 Encoder odometry accumulates error with every step. Week 4 showed that even
