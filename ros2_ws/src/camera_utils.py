@@ -2,7 +2,7 @@
 
 import cv2
 
-CAMERA_DEVICE = "/dev/video1"
+CAMERA_DEVICE = "/dev/video0"
 FLIP_CODE = -1  # -1 = rotate 180 (camera mounted upside-down)
 
 
