@@ -52,18 +52,18 @@ def main():
 
     tests = [
         # (m0, m1, m2, m3, duration, label)
-        (0,   0,   0,   R,   3, "TEST 1: M3 alone forward"),
-        (0,   0,   0,  -R,   3, "TEST 2: M3 alone backward"),
-        (R,   R,   R,   R,   3, "TEST 3: all forward (= normal forward drive)"),
-        (R,  -R,  -R,   R,   3, "TEST 4: strafe pattern (FL+RR fwd, FR+RL rev)"),
-        (-R,  R,   R,  -R,   3, "TEST 5: reverse strafe (FL+RR rev, FR+RL fwd)"),
-        (R,  -R,   R,  -R,   3, "TEST 6: rotation pattern (FL+RL fwd, FR+RR rev)"),
-        (0,   0,  -R,   R,   3, "TEST 7: M2 rev + M3 fwd (same TB6612 chip?)"),
-        (0,   0,   R,   R,   3, "TEST 8: M2 fwd + M3 fwd (same chip, same dir)"),
+        (0,   R,   0,   0,   3, "TEST 1: M1(FR) alone forward"),
+        (0,  -R,   0,   0,   3, "TEST 2: M1(FR) alone backward"),
+        (R,   R,   R,   R,   3, "TEST 3: all forward"),
+        (R,  -R,  -R,   R,   3, "TEST 4: strafe L (M1 rev)"),
+        (-R,  R,   R,  -R,   3, "TEST 5: strafe R (M1 fwd)"),
+        (R,  -R,   R,  -R,   3, "TEST 6: rotation CW (M1 rev)"),
+        (R,   R,   0,   0,   3, "TEST 7: M0+M1 same dir (same TB6612 chip)"),
+        (R,  -R,   0,   0,   3, "TEST 8: M0 fwd + M1 rev (same chip, opposite)"),
     ]
 
     print("=" * 50)
-    print("Motor diagnostic — watch RR motor")
+    print("Motor diagnostic — watch FR (M1) motor")
     print(f"RPM = {R}")
     print("=" * 50)
 
