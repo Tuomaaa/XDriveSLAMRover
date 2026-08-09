@@ -10,6 +10,8 @@ Displays live camera feed with keypoints and a top-down trajectory.
 Press Q to quit.
 """
 
+import csv
+import time
 import numpy as np
 import cv2
 from camera_utils import open_camera, read_frame
@@ -44,6 +46,11 @@ def main():
     scale = 10
 
     frame_count = 0
+    t0 = time.monotonic()
+
+    log_file = open("vo_trajectory.csv", "w", newline="")
+    log_writer = csv.writer(log_file)
+    log_writer.writerow(["timestamp", "x", "y", "z"])
 
     while True:
         frame = read_frame(cap)
@@ -64,7 +71,6 @@ def main():
                 pts1 = np.float32([prev_kp[m.queryIdx].pt for m in good])
                 pts2 = np.float32([kp[m.trainIdx].pt for m in good])
 
-                # undistort matched points (re-project with K so output stays in pixel coords)
                 pts1_u = cv2.undistortPoints(pts1.reshape(-1, 1, 2), K, dist, P=K).reshape(-1, 2)
                 pts2_u = cv2.undistortPoints(pts2.reshape(-1, 1, 2), K, dist, P=K).reshape(-1, 2)
 
@@ -85,13 +91,17 @@ def main():
             else:
                 info = f"matches: {len(good)}"
 
+        # log to CSV
+        elapsed = time.monotonic() - t0
+        log_writer.writerow([f"{elapsed:.3f}", f"{t_w[0,0]:.4f}",
+                             f"{t_w[1,0]:.4f}", f"{t_w[2,0]:.4f}"])
+
         # draw trajectory (X-Z top-down view)
         draw_x = int(t_w[0, 0] * scale) + 300
         draw_z = int(t_w[2, 0] * scale) + 300
         if 0 <= draw_x < 600 and 0 <= draw_z < 600:
             cv2.circle(traj, (draw_x, draw_z), 1, (0, 255, 0), 1)
 
-        # draw info and keypoints
         frame_count += 1
         cv2.putText(frame, info, (10, 30),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
@@ -111,6 +121,8 @@ def main():
 
     cap.release()
     cv2.destroyAllWindows()
+    log_file.close()
+    print(f"Saved vo_trajectory.csv ({frame_count} frames)")
     print(f"Final position: x={t_w[0,0]:.2f} y={t_w[1,0]:.2f} z={t_w[2,0]:.2f}")
 
 
