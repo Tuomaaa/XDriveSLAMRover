@@ -29,7 +29,7 @@ from odometry import OdometryEstimator
 
 MIN_MATCH = 15
 MIN_INLIER = 10
-MAX_T_JUMP = 0.8
+MIN_INLIER_RATIO = 0.3
 
 
 def load_calibration(path="calibration.yaml"):
@@ -141,7 +141,7 @@ def main():
 
     mode = "headless (Ctrl+C to stop)" if headless else "GUI (Q to quit)"
     print(f"VO + Encoder capture — {mode}")
-    print(f"ORB features: 1500, ratio test: 0.75, max jump: {MAX_T_JUMP}")
+    print(f"ORB features: 1500, ratio test: 0.75, min inlier ratio: {MIN_INLIER_RATIO}")
 
     while running:
         frame = read_frame(cap)
@@ -184,17 +184,14 @@ def main():
                         E, pts1_u, pts2_u, K
                     )
 
-                    t_norm = np.linalg.norm(t)
-                    if inliers > MIN_INLIER and t_norm > 0.01:
+                    ratio = inliers / len(good) if len(good) > 0 else 0
+                    if inliers > MIN_INLIER and ratio > MIN_INLIER_RATIO:
                         t_world = R_w.T @ t
-                        jump = np.linalg.norm(t_world)
-
-                        if jump < MAX_T_JUMP:
-                            t_w = t_w + t_world
-                            R_w = R @ R_w
-                            update_count += 1
-                        else:
-                            skip_count += 1
+                        t_w = t_w + t_world
+                        R_w = R @ R_w
+                        update_count += 1
+                    else:
+                        skip_count += 1
 
                     info = f"in:{inliers}/{len(good)} upd:{update_count}"
                 else:
